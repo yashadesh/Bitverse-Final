@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, API, LOGO_URL } from "@/lib/api";
-import { Download, ExternalLink, ArrowLeft, Loader2 } from "lucide-react";
+import { ExternalLink, ArrowLeft, Loader2 } from "lucide-react";
 import DocumentViewer from "@/components/DocumentViewer";
 
 const isMobile = () =>
@@ -61,9 +61,11 @@ export default function Viewer() {
           >
             <ArrowLeft className="w-4 h-4" /> Go Back
           </button>
-          <span className="text-xs font-mono text-white/40 uppercase tracking-widest">
-            Secure Viewer Mode
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono text-white/40 uppercase tracking-widest">
+              Secure Viewer Mode
+            </span>
+          </div>
         </div>
         <DocumentViewer fileUrl={rawUrl} title={f.display_name} />
       </div>
@@ -101,7 +103,6 @@ export default function Viewer() {
           </div>
         </div>
 
-        {/* Dynamic header download/open controls: completely omitted for PDFs */}
         <div className="flex items-center gap-2 shrink-0">
           {!isPdf && (
             <a
@@ -113,18 +114,6 @@ export default function Viewer() {
               data-testid="viewer-open-raw"
             >
               <ExternalLink className="w-3.5 h-3.5" /> Open Raw
-            </a>
-          )}
-          {!isPdf && (
-            <a
-              href={`${API}/files/${f.id}/download`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-neon primary"
-              style={{ padding: "0.4rem 0.8rem", fontSize: "0.7rem" }}
-              data-testid="viewer-download"
-            >
-              <Download className="w-3.5 h-3.5" /> <span className="hidden xs:inline">Download</span>
             </a>
           )}
         </div>
@@ -150,9 +139,6 @@ export default function Viewer() {
         {!isImage && !isOffice && (
           <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-white/70 px-6 text-center py-12">
             <p>Preview not available for .{ext} files.</p>
-            <a href={`${API}/files/${f.id}/download`} target="_blank" rel="noopener noreferrer" className="btn-neon primary">
-              <Download className="w-4 h-4" /> Download
-            </a>
           </div>
         )}
       </div>

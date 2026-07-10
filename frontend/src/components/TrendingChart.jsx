@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
-import { TrendingUp, Eye, Download, ArrowRight, Activity } from "lucide-react";
+import { TrendingUp, Eye, ArrowRight, Activity } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer,
   Tooltip, CartesianGrid, Cell,
@@ -35,9 +35,6 @@ function CustomTooltip({ active, payload }) {
       <div className="mt-2 flex items-center gap-2 text-[#00E5D4]">
         <Eye className="w-3 h-3" /> {d.views} views
       </div>
-      <div className="flex items-center gap-2 text-[#00B8FF]">
-        <Download className="w-3 h-3" /> {d.downloads} downloads
-      </div>
       <div className="flex items-center gap-2 text-[#FFB800] mt-1 border-t border-white/5 pt-1">
         <Activity className="w-3 h-3 text-[#FFB800] animate-pulse" /> {d.activeFocus || 15}% server focus load
       </div>
@@ -47,7 +44,6 @@ function CustomTooltip({ active, payload }) {
 
 export default function TrendingChart() {
   const [data, setData] = useState([]);
-  const [tick, setTick] = useState(0);
 
   const load = () => {
     api.get("/analytics/trending?limit=8").then(({ data }) => {
@@ -59,13 +55,12 @@ export default function TrendingChart() {
     load();
     const t = setInterval(() => {
       load();
-      setTick((n) => n + 1);
-    }, 8000); // live refresh every 8s
+    }, 20000); // live refresh every 20s to reduce unnecessary load and lag
     return () => clearInterval(t);
   }, []);
 
   const chartData = data.map((d) => ({ ...d, shortName: shortName(d.name) }));
-  const total = data.reduce((a, d) => a + (d.views + d.downloads), 0);
+  const total = data.reduce((a, d) => a + d.views, 0);
 
   return (
     <section className="relative px-6 py-16 md:py-24" data-testid="trending-section">
@@ -83,7 +78,7 @@ export default function TrendingChart() {
               What BITians are <span className="text-[#00E5D4]">reading right now</span>
             </h2>
             <p className="mt-3 text-sm md:text-base text-[#B0B8C5] max-w-2xl">
-              Live tracker of the most-viewed & most-downloaded subjects across BITVERSE.
+              Live tracker of the most-viewed subjects across BITVERSE.
               Updates every few seconds.
             </p>
           </div>
@@ -103,7 +98,7 @@ export default function TrendingChart() {
         <div className="card-glass p-4 md:p-8" data-testid="trending-chart-card">
           <div className="w-full" style={{ height: 360, minHeight: 360, minWidth: 320 }}>
             <ResponsiveContainer width="100%" height="100%" minWidth={320} minHeight={360}>
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 55 }} key={tick}>
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 55 }} key="trending-bar-chart">
                 <defs>
                   <linearGradient id="bar-cyan" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#00E5D4" stopOpacity={0.95} />

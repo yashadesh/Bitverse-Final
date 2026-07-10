@@ -1,4 +1,4 @@
-import { Download, Eye, FileText, FileImage, Presentation, FileType2 } from "lucide-react";
+import { Eye, FileText, FileImage, Presentation, FileType2 } from "lucide-react";
 
 function iconFor(name) {
   const ext = (name || "").split(".").pop()?.toLowerCase();
@@ -82,19 +82,6 @@ export default function FileCard({ file, apiBase }) {
         >
           <Eye className="w-3.5 h-3.5" /> <span className="hidden sm:inline">View</span>
         </a>
-        {!isPdf && (
-          <a
-            href={downloadHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-neon primary"
-            style={{ padding: "0.5rem 0.9rem", fontSize: "0.7rem", minHeight: 40 }}
-            data-testid={`file-download-${file.id}`}
-            aria-label="Download file"
-          >
-            <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Download</span>
-          </a>
-        )}
       </div>
     </div>
   );

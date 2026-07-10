@@ -405,18 +405,18 @@ apiRouter.get("/stats", async (req, res) => {
     const resourcesCount = await resourcesCol.countDocuments({});
     const totalPdfFiles = notesCount + pyqsCount + syllabusCount + tutorialCount + bookFileCount;
 
-    // Calculate storage usage
-    const filesList = await filesCol.find({ is_deleted: { $ne: true } }).toArray();
+    // Calculate storage usage - strictly only fetch size to avoid pulling heavy file_data_b64
+    const filesList = await filesCol.find({ is_deleted: { $ne: true } }, { projection: { size: 1 } }).toArray();
     const totalStorageBytes = filesList.reduce((acc, f) => acc + (parseInt(f.size) || 0), 0);
 
-    // Recent Uploads
-    const recentUploads = await filesCol.find({ is_deleted: { $ne: true } })
+    // Recent Uploads - exclude file_data_b64
+    const recentUploads = await filesCol.find({ is_deleted: { $ne: true } }, { projection: { file_data_b64: 0 } })
       .sort({ created_at: -1 })
       .limit(5)
       .toArray();
 
-    // Most Downloaded Resources
-    const mostDownloaded = await filesCol.find({ is_deleted: { $ne: true }, download_count: { $gt: 0 } })
+    // Most Downloaded Resources - exclude file_data_b64
+    const mostDownloaded = await filesCol.find({ is_deleted: { $ne: true }, download_count: { $gt: 0 } }, { projection: { file_data_b64: 0 } })
       .sort({ download_count: -1 })
       .limit(5)
       .toArray();
@@ -592,6 +592,11 @@ apiRouter.delete("/subjects/:id", requireAdmin, async (req, res) => {
 
 // Modules Routes
 apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
+  const cacheKey = `modules_${req.params.subject_id}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
   try {
     const list = await dbService.collection("modules").find({ subject_id: req.params.subject_id }).sort({ order: 1 }).toArray();
     
@@ -613,6 +618,7 @@ apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
       file_count: counts[m.id] || 0
     }));
     
+    cache.set(cacheKey, enrichedList, 15); // Cache for 15 seconds
     res.json(enrichedList);
   } catch (err) {
     res.status(500).json({ detail: err.message });
@@ -621,6 +627,11 @@ apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
 
 // Calculate and fetch live file counts per module across the entire platform
 apiRouter.get("/modules/file-counts", async (req, res) => {
+  const cacheKey = "modules_file_counts";
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
   try {
     const files = await dbService.collection("files").find(
       { is_deleted: { $ne: true }, module_id: { $exists: true, $ne: null } },
@@ -633,6 +644,7 @@ apiRouter.get("/modules/file-counts", async (req, res) => {
         counts[f.module_id] = (counts[f.module_id] || 0) + 1;
       }
     }
+    cache.set(cacheKey, counts, 15); // Cache for 15 seconds
     res.json(counts);
   } catch (err) {
     res.status(500).json({ detail: err.message });
