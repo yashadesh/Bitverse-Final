@@ -10,18 +10,56 @@ export default function ModulePage() {
   const [mod, setMod] = useState(null);
   const [subject, setSubject] = useState(null);
   const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const load = () => {
-    api.get(`/modules/${moduleId}`).then(async ({ data }) => {
-      setMod(data);
-      if (data?.subject_id) {
-        const s = await api.get(`/subjects/${data.subject_id}`);
-        setSubject(s.data);
-      }
+    setLoading(true);
+    Promise.all([
+      api.get(`/modules/${moduleId}`).then(async ({ data }) => {
+        setMod(data);
+        if (data?.subject_id) {
+          const s = await api.get(`/subjects/${data.subject_id}`);
+          setSubject(s.data);
+        }
+      }).catch(() => {}),
+      api.get(`/files?module_id=${moduleId}&category=notes`).then(({ data }) => setFiles(data)).catch(() => {})
+    ]).finally(() => {
+      setLoading(false);
     });
-    api.get(`/files?module_id=${moduleId}&category=notes`).then(({ data }) => setFiles(data));
   };
   useEffect(load, [moduleId]);
+
+  if (loading) {
+    return (
+      <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32 animate-pulse">
+        <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#00E5D4]/40 mb-6">
+          <ArrowLeft className="w-4 h-4 opacity-40" /> Back
+        </div>
+        
+        {/* Header Skeleton */}
+        <div className="space-y-4">
+          <div className="h-6 w-32 bg-white/5 rounded-full border border-white/10" />
+          <div className="h-10 md:h-12 w-2/3 max-w-md bg-white/10 rounded-2xl animate-pulse" />
+          <div className="h-4 w-1/2 max-w-sm bg-white/5 rounded-lg" />
+        </div>
+
+        {/* Files List Skeleton */}
+        <div className="mt-10 space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="card-glass p-5 flex items-center justify-between h-20">
+              <div className="flex items-center gap-3 w-full animate-pulse">
+                <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/10 shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-1/3 bg-white/10 rounded" />
+                  <div className="h-3 w-1/4 bg-white/5 rounded" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">

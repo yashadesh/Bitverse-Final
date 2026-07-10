@@ -336,9 +336,6 @@ async function trackSubjectActivity(subjectId, action) {
       description,
       time: new Date().toISOString()
     });
-
-    // Clear the stats cache so that the homepage counters immediately reflect the new activity
-    cache.clear();
   } catch (err) {
     console.error("Failed to track subject activity:", err);
   }
@@ -533,8 +530,8 @@ apiRouter.get("/subjects/:subject_id", async (req, res) => {
     const s = await dbService.collection("subjects").findOne({ id: req.params.subject_id });
     if (!s) return res.status(404).json({ detail: "Subject not found" });
     
-    // Automatically track user clicking/opening this subject in real-time
-    await trackSubjectActivity(s.id, 'view');
+    // Automatically track user clicking/opening this subject in real-time (non-blocking)
+    trackSubjectActivity(s.id, 'view').catch(err => console.error("Track subject view error:", err));
     
     res.json(s);
   } catch (err) {
@@ -598,13 +595,22 @@ apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
   try {
     const list = await dbService.collection("modules").find({ subject_id: req.params.subject_id }).sort({ order: 1 }).toArray();
     
-    // Dynamically retrieve the latest real-time count of files associated with each module from the database
-    const enrichedList = await Promise.all(list.map(async (m) => {
-      const count = await dbService.collection("files").countDocuments({
-        module_id: m.id,
-        is_deleted: { $ne: true }
-      });
-      return { ...m, file_count: count };
+    // Dynamically retrieve the latest real-time count of files associated with each module in a single query
+    const files = await dbService.collection("files").find(
+      { subject_id: req.params.subject_id, is_deleted: { $ne: true } },
+      { projection: { module_id: 1 } }
+    ).toArray();
+
+    const counts = {};
+    for (const f of files) {
+      if (f.module_id) {
+        counts[f.module_id] = (counts[f.module_id] || 0) + 1;
+      }
+    }
+
+    const enrichedList = list.map(m => ({
+      ...m,
+      file_count: counts[m.id] || 0
     }));
     
     res.json(enrichedList);
@@ -616,14 +622,16 @@ apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
 // Calculate and fetch live file counts per module across the entire platform
 apiRouter.get("/modules/file-counts", async (req, res) => {
   try {
-    const modules = await dbService.collection("modules").find({}).toArray();
+    const files = await dbService.collection("files").find(
+      { is_deleted: { $ne: true }, module_id: { $exists: true, $ne: null } },
+      { projection: { module_id: 1 } }
+    ).toArray();
+
     const counts = {};
-    for (const m of modules) {
-      const count = await dbService.collection("files").countDocuments({
-        module_id: m.id,
-        is_deleted: { $ne: true }
-      });
-      counts[m.id] = count;
+    for (const f of files) {
+      if (f.module_id) {
+        counts[f.module_id] = (counts[f.module_id] || 0) + 1;
+      }
     }
     res.json(counts);
   } catch (err) {
@@ -638,16 +646,20 @@ apiRouter.get("/modules/:id", async (req, res) => {
       return res.status(404).json({ detail: "Module not found" });
     }
     
-    // Automatically track user clicking / opening this module in real-time
-    await trackSubjectActivity(mod.subject_id, 'view');
-    
-    // Publish a module-specific student activity to the feed
-    const subject = await dbService.collection("subjects").findOne({ id: mod.subject_id });
-    await dbService.collection("activity_log").insertOne({
-      id: crypto.randomUUID(),
-      description: `Student opened "${mod.name}" of ${subject ? subject.name : "Subject"}`,
-      time: new Date().toISOString()
-    });
+    // Automatically track user clicking / opening this module in background (non-blocking)
+    (async () => {
+      try {
+        await trackSubjectActivity(mod.subject_id, 'view');
+        const subject = await dbService.collection("subjects").findOne({ id: mod.subject_id });
+        await dbService.collection("activity_log").insertOne({
+          id: crypto.randomUUID(),
+          description: `Student opened "${mod.name}" of ${subject ? subject.name : "Subject"}`,
+          time: new Date().toISOString()
+        });
+      } catch (trackErr) {
+        console.error("Module tracking background error:", trackErr);
+      }
+    })();
     
     res.json(mod);
   } catch (err) {
@@ -858,12 +870,12 @@ apiRouter.get("/files/:id/view", async (req, res) => {
       return res.status(404).json({ detail: "File record not found" });
     }
 
-    // 1. Increment file-specific view metrics and track engagement under parent subject
-    await dbService.collection("files").updateOne(
+    // 1. Increment file-specific view metrics and track engagement under parent subject (non-blocking)
+    dbService.collection("files").updateOne(
       { id: file.id },
       { $inc: { view_count: 1 } }
-    );
-    await trackSubjectActivity(file.subject_id, 'view');
+    ).catch(err => console.error("Increment view_count error:", err));
+    trackSubjectActivity(file.subject_id, 'view').catch(err => console.error("Track activity error:", err));
 
     // 2. Intelligent Document Format Handler: Redirect DOC/DOCX/PPT/PPTX to Google Docs Viewer
     const ext = (file.original_filename || "").split(".").pop()?.toLowerCase();
@@ -1175,21 +1187,21 @@ apiRouter.get("/files/:id/download", async (req, res) => {
       return res.status(404).json({ detail: "File record not found" });
     }
 
-    // Increment download count securely
-    await dbService.collection("files").updateOne(
+    // Increment download count securely (non-blocking)
+    dbService.collection("files").updateOne(
       { id: req.params.id },
       { $inc: { download_count: 1 } }
-    );
+    ).catch(err => console.error("Increment download_count error:", err));
 
-    // Track download action under subject analytics
-    await trackSubjectActivity(file.subject_id, 'download');
+    // Track download action under subject analytics (non-blocking)
+    trackSubjectActivity(file.subject_id, 'download').catch(err => console.error("Track activity error:", err));
 
-    // Log Activity
-    await dbService.collection("activity_log").insertOne({
+    // Log Activity (non-blocking)
+    dbService.collection("activity_log").insertOne({
       id: crypto.randomUUID(),
       description: `Anonymous student downloaded "${file.display_name}"`,
       time: new Date().toISOString()
-    });
+    }).catch(err => console.error("Log download activity error:", err));
 
     // Prioritize Database Binary Stream (survives container restarts)
     if (file.file_data_b64) {
