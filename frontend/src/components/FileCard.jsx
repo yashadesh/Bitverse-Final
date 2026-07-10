@@ -28,10 +28,9 @@ export default function FileCard({ file, apiBase }) {
   const { Icon, color } = iconFor(file.original_filename);
   const baseUrlStr = typeof apiBase === "string" ? apiBase : (apiBase?.defaults?.baseURL || "/api");
   const downloadHref = `${baseUrlStr}/files/${file.id}/download`;
-  const viewUrl = `/viewer/${file.id}`;
-
   const ext = (file.original_filename || "").split(".").pop()?.toLowerCase();
   const isPdf = ext === "pdf";
+  const viewUrl = isPdf ? `${baseUrlStr}/files/${file.id}/view` : `/viewer/${file.id}`;
 
   const handleRowClick = (e) => {
     // If user clicked on a link/anchor tag directly, let that handle itself

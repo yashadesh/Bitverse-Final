@@ -7,8 +7,8 @@ const API_BASE_URL =
   '/api';
 
 // 2. Export the static local paths for assets
-export const LOGO_URL = '/public/assets/bitverse-logo.png';
-export const DEV_PHOTO_URL = '/public/assets/adesh-yash.png';
+export const LOGO_URL = '/assets/bitverse-logo.png';
+export const DEV_PHOTO_URL = '/assets/adesh-yash.png';
 
 // 3. Configure the Axios connection instance
 export const api = axios.create({

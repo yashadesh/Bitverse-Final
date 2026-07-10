@@ -192,7 +192,8 @@ export default function NotesHub() {
                 </h4>
                 <div className="grid gap-2">
                   {results.files.map((file) => {
-                    const viewUrl = `/viewer/${file.id}`;
+                    const isPdf = (file.original_filename || "").split(".").pop()?.toLowerCase() === "pdf";
+                    const viewUrl = isPdf ? `/api/files/${file.id}/view` : `/viewer/${file.id}`;
                     return (
                       <a
                         key={file.id}
