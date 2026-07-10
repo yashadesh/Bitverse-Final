@@ -13,9 +13,6 @@ export const DEV_PHOTO_URL = '/public/assets/adesh-yash.png';
 // 3. Configure the Axios connection instance
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
   withCredentials: true,
 });
 

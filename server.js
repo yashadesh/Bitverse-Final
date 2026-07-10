@@ -7,8 +7,18 @@ import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import { connectDb, dbService } from './db.js';
+import { v2 as cloudinary } from 'cloudinary';
 
 dotenv.config();
+
+// Cloudinary configuration fallback
+if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -806,6 +816,10 @@ apiRouter.get("/files/:id/view", async (req, res) => {
     }
 
     // 3. Check for external URLs
+    if (!file.url || file.url.trim() === "") {
+      return res.status(404).json({ detail: "File URL is missing. Please edit or re-upload this file in the Admin panel." });
+    }
+
     const isExternalUrl = file.url.startsWith("http://") || file.url.startsWith("https://");
     if (isExternalUrl) {
       // Direct Google Drive link handling: format into standard web previews rather than raw file links
@@ -816,6 +830,19 @@ apiRouter.get("/files/:id/view", async (req, res) => {
           driveUrl = `https://drive.google.com/file/d/${match[1]}/view`;
         }
         return res.redirect(driveUrl);
+      }
+
+      // Stream PDF files locally to bypass CORS constraints in the frontend iframe
+      const fileExt = (file.original_filename || "").split(".").pop()?.toLowerCase();
+      if (fileExt === "pdf" || file.mime_type === "application/pdf") {
+        try {
+          const { buffer, contentType } = await getObject(file.url);
+          res.setHeader("Content-Type", contentType || "application/pdf");
+          res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.original_filename || "file.pdf")}"`);
+          return res.send(buffer);
+        } catch (proxyErr) {
+          console.warn("Failed to proxy external PDF direct stream, falling back to redirect:", proxyErr);
+        }
       }
       return res.redirect(file.url);
     }
@@ -857,8 +884,37 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
     finalFilename = req.file.originalname;
     finalSize = req.file.size;
 
+    const hasCloudinary = process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET;
     const emergentKey = process.env.EMERGENT_LLM_KEY;
-    if (emergentKey) {
+
+    if (hasCloudinary) {
+      try {
+        const uploadResult = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              resource_type: "auto",
+              folder: "bitverse",
+              public_id: `${Date.now()}-${path.parse(req.file.originalname).name}`
+            },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          uploadStream.end(req.file.buffer);
+        });
+        finalUrl = uploadResult.secure_url;
+      } catch (err) {
+        console.error("Cloudinary upload failed, falling back to local storage:", err);
+        const uploadDir = path.join(process.cwd(), 'uploads');
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        const localFilename = `${Date.now()}-${req.file.originalname}`;
+        fs.writeFileSync(path.join(uploadDir, localFilename), req.file.buffer);
+        finalUrl = `/api/uploads/${localFilename}`;
+      }
+    } else if (emergentKey) {
       const storageKey = await initStorage();
       if (storageKey) {
         const uniqueFilename = `${Date.now()}-${req.file.originalname}`;
