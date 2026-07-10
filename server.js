@@ -236,7 +236,35 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve Local Uploaded Files
+// Serve Local Uploaded Files with DB backup fallback to survive container restarts
+app.get('/api/uploads/:filename', async (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(process.cwd(), 'uploads', filename);
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+
+  try {
+    const files = await dbService.collection("files").find({ is_deleted: { $ne: true } }).toArray();
+    const file = files.find(f => {
+      const urlMatches = f.url && f.url.toLowerCase().includes(filename.toLowerCase());
+      const nameMatches = f.original_filename && f.original_filename.toLowerCase() === filename.toLowerCase();
+      return urlMatches || nameMatches;
+    });
+
+    if (file && file.file_data_b64) {
+      const buffer = Buffer.from(file.file_data_b64, "base64");
+      res.setHeader("Content-Type", file.mime_type || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.original_filename || "file")}"`);
+      return res.send(buffer);
+    }
+  } catch (err) {
+    console.error("Upload fallback query error:", err);
+  }
+
+  return res.status(404).json({ detail: "File not found" });
+});
+
 app.use('/api/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Simple In-Memory Cache for heavy API endpoints to optimize server load
@@ -815,6 +843,14 @@ apiRouter.get("/files/:id/view", async (req, res) => {
       return res.redirect(`https://docs.google.com/gview?url=${encodeURIComponent(absoluteDownloadUrl)}&embedded=true`);
     }
 
+    // 2.5 Prioritize Database Binary Stream (survives container restarts)
+    if (file.file_data_b64) {
+      const buffer = Buffer.from(file.file_data_b64, "base64");
+      res.setHeader("Content-Type", file.mime_type || "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.original_filename || "file.pdf")}"`);
+      return res.send(buffer);
+    }
+
     // 3. Check for external URLs
     if (!file.url || file.url.trim() === "") {
       return res.status(404).json({ detail: "File URL is missing. Please edit or re-upload this file in the Admin panel." });
@@ -849,7 +885,40 @@ apiRouter.get("/files/:id/view", async (req, res) => {
     
     // Support relative local fallback storage paths (e.g. starting with "/api/")
     if (file.url.startsWith("/api/")) {
-      return res.redirect(file.url);
+      const filename = path.basename(file.url);
+      const filePath = path.join(process.cwd(), 'uploads', filename);
+      if (fs.existsSync(filePath)) {
+        res.setHeader("Content-Type", file.mime_type || "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.original_filename || "file.pdf")}"`);
+        return res.sendFile(filePath);
+      }
+
+      // Local file is missing from stateless storage (container restart)
+      res.setHeader("Content-Type", "text/html");
+      return res.status(404).send(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>File Not Found - BITVERSE</title>
+            <style>
+              body { font-family: sans-serif; background: #05070A; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
+              .card { background: #0A0E14; border: 1px solid rgba(255, 255, 255, 0.1); padding: 40px; border-radius: 16px; max-w: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+              h1 { color: #ff5c5c; margin-top: 0; font-size: 24px; }
+              p { color: rgba(255,255,255,0.7); line-height: 1.6; font-size: 15px; }
+              .btn { display: inline-block; background: #00E5D4; color: #000; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; transition: all 0.2s; }
+              .btn:hover { opacity: 0.9; transform: scale(1.02); }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>Document Temporarily Unavailable</h1>
+              <p>The requested file <strong>${file.display_name}</strong> was stored locally on the server, but the server container was recently restarted or scaled down, which wiped the temporary disk.</p>
+              <p><strong>To fix this permanently:</strong> Please go to the Admin Panel, click "Replace" or delete/re-upload this file. BITVERSE will now automatically store it permanently in the cloud database so it never expires again!</p>
+              <a href="/" class="btn">Return to BITVERSE</a>
+            </div>
+          </body>
+        </html>
+      `);
     }
 
     // Emergent Cloud Storage File Stream
@@ -879,10 +948,14 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
   let finalUrl = file_url || "";
   let finalSize = parseInt(file_size) || 0;
   let finalFilename = file_original_name || display_name || "External Link";
+  let fileDataB64 = null;
 
   if (req.file) {
     finalFilename = req.file.originalname;
     finalSize = req.file.size;
+    if (req.file.size < 15 * 1024 * 1024) {
+      fileDataB64 = req.file.buffer.toString("base64");
+    }
 
     const hasCloudinary = process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET;
     const emergentKey = process.env.EMERGENT_LLM_KEY;
@@ -966,7 +1039,10 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
     if (display_name) {
       updateFields.display_name = display_name;
     }
-    
+    if (fileDataB64) {
+      updateFields.file_data_b64 = fileDataB64;
+    }
+
     // Use highly-compatible updateOne + findOne sequence supporting both native Mongo and Mock dbService fallback
     await dbService.collection("files").updateOne(
       { id: fileId },
@@ -994,6 +1070,9 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
       download_count: 0,
       created_at: new Date().toISOString()
     };
+    if (fileDataB64) {
+      fileDoc.file_data_b64 = fileDataB64;
+    }
 
     await dbService.collection("files").insertOne(fileDoc);
 
@@ -1080,13 +1159,55 @@ apiRouter.get("/files/:id/download", async (req, res) => {
       time: new Date().toISOString()
     });
 
-    const isExternalUrl = file.url.startsWith("http://") || file.url.startsWith("https://") || file.url.startsWith("/api/");
+    // Prioritize Database Binary Stream (survives container restarts)
+    if (file.file_data_b64) {
+      const buffer = Buffer.from(file.file_data_b64, "base64");
+      res.setHeader("Content-Type", file.mime_type || "application/octet-stream");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.original_filename || "file")}"`);
+      return res.send(buffer);
+    }
+
+    const isExternalUrl = file.url.startsWith("http://") || file.url.startsWith("https://");
     if (isExternalUrl) {
-      // Direct redirect or proxy fetch if it starts with http
-      if (file.url.startsWith("/api/")) {
-        return res.redirect(file.url);
-      }
       return res.redirect(file.url);
+    }
+
+    // Support relative local fallback storage paths (e.g. starting with "/api/")
+    if (file.url.startsWith("/api/")) {
+      const filename = path.basename(file.url);
+      const filePath = path.join(process.cwd(), 'uploads', filename);
+      if (fs.existsSync(filePath)) {
+        res.setHeader("Content-Type", file.mime_type || "application/octet-stream");
+        res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.original_filename || "file")}"`);
+        return res.sendFile(filePath);
+      }
+
+      // Local file is missing from stateless storage (container restart)
+      res.setHeader("Content-Type", "text/html");
+      return res.status(404).send(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>File Not Found - BITVERSE</title>
+            <style>
+              body { font-family: sans-serif; background: #05070A; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center; }
+              .card { background: #0A0E14; border: 1px solid rgba(255, 255, 255, 0.1); padding: 40px; border-radius: 16px; max-w: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+              h1 { color: #ff5c5c; margin-top: 0; font-size: 24px; }
+              p { color: rgba(255,255,255,0.7); line-height: 1.6; font-size: 15px; }
+              .btn { display: inline-block; background: #00E5D4; color: #000; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 20px; transition: all 0.2s; }
+              .btn:hover { opacity: 0.9; transform: scale(1.02); }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <h1>Document Temporarily Unavailable</h1>
+              <p>The requested file <strong>${file.display_name}</strong> was stored locally on the server, but the server container was recently restarted or scaled down, which wiped the temporary disk.</p>
+              <p><strong>To fix this permanently:</strong> Please go to the Admin Panel, click "Replace" or delete/re-upload this file. BITVERSE will now automatically store it permanently in the cloud database so it never expires again!</p>
+              <a href="/" class="btn">Return to BITVERSE</a>
+            </div>
+          </body>
+        </html>
+      `);
     }
 
     // Emergent Cloud Storage File Stream Fallback
@@ -1374,6 +1495,9 @@ app.use("/public/assets", express.static(path.join(process.cwd(), "frontend", "p
 const buildPath = path.join(process.cwd(), 'frontend', 'build');
 app.use(express.static(buildPath));
 app.get('*', (req, res) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) {
+    return res.status(404).json({ detail: "Endpoint or static asset not found" });
+  }
   if (fs.existsSync(path.join(buildPath, 'index.html'))) {
     res.sendFile(path.join(buildPath, 'index.html'));
   } else {
