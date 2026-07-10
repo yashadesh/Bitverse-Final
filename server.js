@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
+import crypto from 'crypto';
 import { connectDb, dbService } from './db.js';
 import { v2 as cloudinary } from 'cloudinary';
 
@@ -236,6 +237,17 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Dynamic host tracking to enable robust self-pinging on Render
+let lastKnownExternalUrl = process.env.RENDER_EXTERNAL_URL || null;
+
+app.use((req, res, next) => {
+  if (req.headers.host && !req.headers.host.includes("localhost") && !req.headers.host.includes("127.0.0.1") && !req.headers.host.includes("0.0.0.0")) {
+    const protocol = req.secure || req.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+    lastKnownExternalUrl = `${protocol}://${req.headers.host}`;
+  }
+  next();
+});
+
 // Serve Local Uploaded Files with DB backup fallback to survive container restarts
 app.get('/api/uploads/:filename', async (req, res) => {
   const filename = req.params.filename;
@@ -245,11 +257,13 @@ app.get('/api/uploads/:filename', async (req, res) => {
   }
 
   try {
-    const files = await dbService.collection("files").find({ is_deleted: { $ne: true } }).toArray();
-    const file = files.find(f => {
-      const urlMatches = f.url && f.url.toLowerCase().includes(filename.toLowerCase());
-      const nameMatches = f.original_filename && f.original_filename.toLowerCase() === filename.toLowerCase();
-      return urlMatches || nameMatches;
+    const escapedFilename = filename.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const file = await dbService.collection("files").findOne({
+      is_deleted: { $ne: true },
+      $or: [
+        { url: { $regex: escapedFilename, $options: 'i' } },
+        { original_filename: { $regex: '^' + escapedFilename + '$', $options: 'i' } }
+      ]
     });
 
     if (file && file.file_data_b64) {
@@ -351,6 +365,24 @@ const apiRouter = express.Router();
 // Meta / Health Check
 apiRouter.get("/", (req, res) => {
   res.json({ app: "BITVERSE", tagline: "The Digital Universe of BIT Mesra" });
+});
+
+apiRouter.get("/health", (req, res) => {
+  res.json({
+    status: "UP",
+    timestamp: new Date().toISOString(),
+    uptime: `${Math.floor(process.uptime())}s`,
+    environment: process.env.NODE_ENV || "production",
+    renderUrl: lastKnownExternalUrl || "not_detected_yet",
+    database: {
+      connected: true, // If server loaded, connection to MongoDB/Mock is established
+    },
+    memory: {
+      rss: `${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)} MB`,
+      heapUsed: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`,
+    }
+  });
 });
 
 apiRouter.get("/stats", async (req, res) => {
@@ -730,7 +762,7 @@ apiRouter.get("/subjects/:subject_id/files", async (req, res) => {
     q.category = category;
   }
   try {
-    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    const list = await dbService.collection("files").find(q, { projection: { file_data_b64: 0 } }).sort({ created_at: -1 }).toArray();
     res.json(list);
   } catch (err) {
     res.status(500).json({ detail: err.message });
@@ -744,7 +776,7 @@ apiRouter.get("/modules/:module_id/files", async (req, res) => {
     q.category = category;
   }
   try {
-    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    const list = await dbService.collection("files").find(q, { projection: { file_data_b64: 0 } }).sort({ created_at: -1 }).toArray();
     res.json(list);
   } catch (err) {
     res.status(500).json({ detail: err.message });
@@ -782,7 +814,7 @@ apiRouter.get("/files", async (req, res) => {
       }
     }
 
-    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    const list = await dbService.collection("files").find(q, { projection: { file_data_b64: 0 } }).sort({ created_at: -1 }).toArray();
     
     // Support high-performance, optional query pagination (lazy-loading / page-by-page rendering)
     const page = parseInt(req.query.page);
@@ -808,7 +840,7 @@ apiRouter.get("/files", async (req, res) => {
 // 2. GET /api/files/:id endpoint (Crucial for the file Viewer page)
 apiRouter.get("/files/:id", async (req, res) => {
   try {
-    const file = await dbService.collection("files").findOne({ id: req.params.id });
+    const file = await dbService.collection("files").findOne({ id: req.params.id }, { projection: { file_data_b64: 0 } });
     if (!file) {
       return res.status(404).json({ detail: "File record not found" });
     }
@@ -1347,7 +1379,7 @@ apiRouter.get("/search", async (req, res) => {
         { original_filename: rx },
         { category: rx }
       ]
-    }).limit(15).toArray();
+    }, { projection: { file_data_b64: 0 } }).limit(15).toArray();
 
     // Fetch related subjects/modules for files context
     const fileSubjectIds = [...new Set(files.map(f => f.subject_id).filter(Boolean))];
@@ -1524,6 +1556,31 @@ app.get('*', (req, res) => {
   }
 });
 
+// Self-Ping Keep-Alive Job (Prevents Render spin-down by self-pinging every 10 minutes)
+function startSelfPingJob() {
+  const TEN_MINUTES = 10 * 60 * 1000;
+  setInterval(async () => {
+    const targetUrl = lastKnownExternalUrl || process.env.RENDER_EXTERNAL_URL;
+    if (!targetUrl) {
+      console.log("[Keep-Alive] No public external URL detected yet to self-ping.");
+      return;
+    }
+    
+    try {
+      const pingEndpoint = `${targetUrl}/api/health`;
+      console.log(`[Keep-Alive] Sending self-ping to keep service active: ${pingEndpoint}`);
+      const response = await fetch(pingEndpoint);
+      if (response.ok) {
+        console.log(`[Keep-Alive] Self-ping successful: ${response.status} OK`);
+      } else {
+        console.warn(`[Keep-Alive] Self-ping returned non-OK status: ${response.status}`);
+      }
+    } catch (err) {
+      console.error("[Keep-Alive] Self-ping request failed:", err.message);
+    }
+  }, TEN_MINUTES);
+}
+
 // Startup Lifecycle
 async function startServer() {
   await connectDb();
@@ -1532,6 +1589,8 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+    // Trigger keep-alive routine
+    startSelfPingJob();
   });
 }
 

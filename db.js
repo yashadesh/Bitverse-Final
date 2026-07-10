@@ -209,6 +209,18 @@ function matches(doc, query) {
   return true;
 }
 
+// Simple query projection helper
+function projectDoc(doc, projection) {
+  if (!doc || !projection) return doc;
+  const newDoc = { ...doc };
+  for (const key in projection) {
+    if (projection[key] === 0 || projection[key] === false) {
+      delete newDoc[key];
+    }
+  }
+  return newDoc;
+}
+
 export const dbService = {
   collection: (name) => {
     // Prevent undefined mock collection crashes on local fallback
@@ -216,27 +228,39 @@ export const dbService = {
       mockDb[name] = [];
     }
     return {
-      findOne: async (query) => {
+      findOne: async (query, options = {}) => {
         if (isConnected) {
           try {
-            return await db.collection(name).findOne(query);
+            return await db.collection(name).findOne(query, options);
           } catch (err) {
             console.warn(`MongoDB query failed on ${name}. Falling back to mock.`, err);
           }
         }
-        return mockDb[name].find(doc => matches(doc, query)) || null;
+        const doc = mockDb[name].find(d => matches(d, query)) || null;
+        return doc ? projectDoc(doc, options.projection) : null;
       },
-    find: (query) => {
+      find: (query, options = {}) => {
+        let limitVal = null;
         if (isConnected) {
           try {
-            const cursor = db.collection(name).find(query);
-            return {
+            const cursor = db.collection(name).find(query, options);
+            const chain = {
+              limit: (lim) => {
+                limitVal = lim;
+                cursor.limit(lim);
+                return chain;
+              },
               sort: (sortObj) => {
                 cursor.sort(sortObj);
-                return {
+                const sortChain = {
+                  limit: (lim) => {
+                    limitVal = lim;
+                    cursor.limit(lim);
+                    return sortChain;
+                  },
                   to_list: async (limit) => {
                     try {
-                      if (limit) cursor.limit(limit);
+                      if (limit || limitVal) cursor.limit(limit || limitVal);
                       return await cursor.toArray();
                     } catch (err) {
                       console.warn(`MongoDB to_list/toArray failed on ${name}. Falling back to mock.`, err);
@@ -248,11 +272,12 @@ export const dbService = {
                         if (a[sortKey] > b[sortKey]) return sortDir === 1 ? 1 : -1;
                         return 0;
                       });
-                      return mockResults.slice(0, limit || mockResults.length);
+                      return mockResults.slice(0, limit || limitVal || mockResults.length).map(doc => projectDoc(doc, options.projection));
                     }
                   },
                   toArray: async () => {
                     try {
+                      if (limitVal) cursor.limit(limitVal);
                       return await cursor.toArray();
                     } catch (err) {
                       console.warn(`MongoDB toArray failed on ${name}. Falling back to mock.`, err);
@@ -264,37 +289,45 @@ export const dbService = {
                         if (a[sortKey] > b[sortKey]) return sortDir === 1 ? 1 : -1;
                         return 0;
                       });
-                      return mockResults;
+                      return mockResults.slice(0, limitVal || mockResults.length).map(doc => projectDoc(doc, options.projection));
                     }
                   }
                 };
+                return sortChain;
               },
               to_list: async (limit) => {
                 try {
-                  if (limit) cursor.limit(limit);
+                  if (limit || limitVal) cursor.limit(limit || limitVal);
                   return await cursor.toArray();
                 } catch (err) {
                   console.warn(`MongoDB to_list failed on ${name}. Falling back to mock.`, err);
-                  return mockDb[name].filter(doc => matches(doc, query)).slice(0, limit || mockDb[name].length);
+                  return mockDb[name].filter(doc => matches(doc, query)).slice(0, limit || limitVal || mockDb[name].length).map(doc => projectDoc(doc, options.projection));
                 }
               },
               toArray: async () => {
                 try {
+                  if (limitVal) cursor.limit(limitVal);
                   return await cursor.toArray();
                 } catch (err) {
                   console.warn(`MongoDB toArray failed on ${name}. Falling back to mock.`, err);
-                  return mockDb[name].filter(doc => matches(doc, query));
+                  return mockDb[name].filter(doc => matches(doc, query)).slice(0, limitVal || mockDb[name].length).map(doc => projectDoc(doc, options.projection));
                 }
               }
             };
+            return chain;
           } catch (err) {
             console.warn(`MongoDB find failed on ${name}. Falling back to mock.`, err);
           }
         }
         
         // Mock fallback query
-        let results = mockDb[name].filter(doc => matches(doc, query));
-        return {
+        let results = mockDb[name].filter(doc => matches(doc, query)).map(doc => projectDoc(doc, options.projection));
+        let mockLimit = null;
+        const mockChain = {
+          limit: (lim) => {
+            mockLimit = lim;
+            return mockChain;
+          },
           sort: (sortObj) => {
             const sortKey = Object.keys(sortObj)[0];
             const sortDir = sortObj[sortKey];
@@ -303,14 +336,20 @@ export const dbService = {
               if (a[sortKey] > b[sortKey]) return sortDir === 1 ? 1 : -1;
               return 0;
             });
-            return {
-              to_list: async (limit) => results.slice(0, limit || results.length),
-              toArray: async () => results
+            const mockSortChain = {
+              limit: (lim) => {
+                mockLimit = lim;
+                return mockSortChain;
+              },
+              to_list: async (limit) => results.slice(0, limit || mockLimit || results.length),
+              toArray: async () => results.slice(0, mockLimit || results.length)
             };
+            return mockSortChain;
           },
-          to_list: async (limit) => results.slice(0, limit || results.length),
-          toArray: async () => results
+          to_list: async (limit) => results.slice(0, limit || mockLimit || results.length),
+          toArray: async () => results.slice(0, mockLimit || results.length)
         };
+        return mockChain;
       },
       countDocuments: async (query) => {
         if (isConnected) {
