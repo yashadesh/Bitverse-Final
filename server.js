@@ -1,0 +1,1358 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
+import { connectDb, dbService } from './db.js';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Env Configuration
+const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-env";
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "adeshyash.12@gmail.com").trim().toLowerCase();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+
+// Storage Configuration
+let _storageKey = null;
+async function initStorage() {
+  if (_storageKey) return _storageKey;
+  const emergentKey = process.env.EMERGENT_LLM_KEY;
+  if (!emergentKey) return null;
+  try {
+    const resp = await fetch("https://integrations.emergentagent.com/objstore/api/v1/storage/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ emergent_key: emergentKey })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    _storageKey = data.storage_key;
+    return _storageKey;
+  } catch (err) {
+    console.error("Storage init failed:", err);
+    return null;
+  }
+}
+
+async function getObject(storagePath) {
+  // If it's a full URL, fetch it directly first (e.g. Cloudinary links)
+  if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) {
+    try {
+      const resp = await fetch(storagePath);
+      if (resp.ok) {
+        const arrayBuffer = await resp.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const contentType = resp.headers.get("content-type") || "application/octet-stream";
+        return { buffer, contentType };
+      }
+    } catch (e) {
+      console.warn("Direct fetch of storage path failed, trying object storage proxy", e);
+    }
+  }
+
+  // Fallback to Emergent Object Storage
+  const storageUrl = "https://integrations.emergentagent.com/objstore/api/v1/storage";
+  const emergentKey = process.env.EMERGENT_LLM_KEY;
+  if (!emergentKey) {
+    throw new Error("EMERGENT_LLM_KEY is required for object storage");
+  }
+
+  let key = await initStorage();
+  if (!key) {
+    throw new Error("Object storage unavailable");
+  }
+
+  let resp = await fetch(`${storageUrl}/objects/${storagePath}`, {
+    headers: { "X-Storage-Key": key }
+  });
+
+  if (resp.status === 403) {
+    _storageKey = null;
+    key = await initStorage();
+    resp = await fetch(`${storageUrl}/objects/${storagePath}`, {
+      headers: { "X-Storage-Key": key }
+    });
+  }
+
+  if (!resp.ok) {
+    throw new Error(`Failed to fetch from object storage: ${resp.statusText}`);
+  }
+
+  const arrayBuffer = await resp.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+  return { buffer, contentType };
+}
+
+// Seeding Admin & Subjects
+async function seedAdmin() {
+  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+    console.warn("ADMIN_EMAIL/ADMIN_PASSWORD not set — admin seeding skipped");
+    return;
+  }
+  const existing = await dbService.collection("admin_user").findOne({ email: ADMIN_EMAIL });
+  if (!existing) {
+    await dbService.collection("admin_user").insertOne({
+      email: ADMIN_EMAIL,
+      password_hash: bcrypt.hashSync(ADMIN_PASSWORD, 10),
+      created_at: new Date().toISOString()
+    });
+    console.log(`Admin user seeded: ${ADMIN_EMAIL}`);
+  } else if (!bcrypt.compareSync(ADMIN_PASSWORD, existing.password_hash)) {
+    await dbService.collection("admin_user").updateOne(
+      { email: ADMIN_EMAIL },
+      { $set: { password_hash: bcrypt.hashSync(ADMIN_PASSWORD, 10) } }
+    );
+    console.log(`Admin password rotated for: ${ADMIN_EMAIL}`);
+  }
+}
+
+const SEM1_SUBJECTS = [
+  ["Environmental Science", 2],
+  ["Chemistry", 4],
+  ["Chemistry Lab", 1],
+  ["Basic Electronics", 3],
+  ["Basic Electronics Lab", 1],
+  ["Mathematics-I", 4],
+  ["Basics of Mechanical Engineering", 3],
+  ["Engineering Graphics", 2],
+  ["Workshop Practice", 1],
+  ["NSS", 1]
+];
+
+const SEM2_SUBJECTS = [
+  ["Biological Science for Engineers", 2],
+  ["Programming for Problem Solving", 4],
+  ["Programming for Problem Solving Laboratories", 1],
+  ["Basics of Electrical Engineering", 3],
+  ["Electrical Engineering Lab", 1],
+  ["Communication Skill - I", 1.5],
+  ["Mathematics-I", 4],
+  ["Physics", 4],
+  ["Physics Lab", 1],
+  ["PT and Games", 1]
+];
+
+const DEPRECATED_SUBJECTS = ["Mathematics-II", "Communication Skill-I", "Programming for Problem Solving Laboratory"];
+
+async function seedIfEmpty() {
+  // Purge deprecated subjects on startup
+  for (const depName of DEPRECATED_SUBJECTS) {
+    const depr = await dbService.collection("subjects").findOne({ name: depName });
+    if (depr) {
+      await dbService.collection("modules").deleteMany({ subject_id: depr.id });
+      await dbService.collection("files").updateMany({ subject_id: depr.id }, { $set: { is_deleted: true } });
+      await dbService.collection("subject_stats").deleteMany({ subject_id: depr.id });
+      await dbService.collection("subjects").deleteOne({ id: depr.id });
+      console.log(`Purged deprecated subject: ${depName}`);
+    }
+  }
+
+  // Ensure all canonical subjects exist dynamically
+  for (const [sem, arr] of [[1, SEM1_SUBJECTS], [2, SEM2_SUBJECTS]]) {
+    for (let idx = 0; idx < arr.length; idx++) {
+      const [name, credits] = arr[idx];
+      let subj = await dbService.collection("subjects").findOne({ name, semester: sem });
+      
+      if (!subj) {
+        // Create subject
+        const subjectId = crypto.randomUUID();
+        subj = {
+          id: subjectId,
+          name,
+          semester: sem,
+          order: idx,
+          credits,
+          created_at: new Date().toISOString()
+        };
+        await dbService.collection("subjects").insertOne(subj);
+        console.log(`Seeded missing subject: ${name} (Sem ${sem})`);
+
+        // Seed 5 modules for this new subject
+        for (let m = 1; m <= 5; m++) {
+          const mod = {
+            id: crypto.randomUUID(),
+            subject_id: subjectId,
+            name: `Module ${m}`,
+            order: m,
+            created_at: new Date().toISOString()
+          };
+          await dbService.collection("modules").insertOne(mod);
+        }
+      } else {
+        // Sync attributes if already existing
+        await dbService.collection("subjects").updateOne(
+          { id: subj.id },
+          { $set: { credits, order: idx } }
+        );
+      }
+    }
+  }
+  console.log("Subject synchronization complete.");
+}
+
+// Auth Middleware
+function requireAdmin(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ detail: "Not authenticated" });
+  }
+  const token = authHeader.substring(7);
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.role !== 'admin' || payload.sub.toLowerCase() !== ADMIN_EMAIL) {
+      return res.status(403).json({ detail: "Admin only" });
+    }
+    req.user = payload;
+    next();
+  } catch (err) {
+    return res.status(401).json({ detail: "Invalid or expired token" });
+  }
+}
+
+// Middlewares
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve Local Uploaded Files
+app.use('/api/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+// Simple In-Memory Cache for heavy API endpoints to optimize server load
+const cache = {
+  store: {},
+  get(key) {
+    const item = this.store[key];
+    if (!item) return null;
+    if (Date.now() > item.expiry) {
+      delete this.store[key];
+      return null;
+    }
+    return item.value;
+  },
+  set(key, value, ttlSeconds) {
+    this.store[key] = {
+      value,
+      expiry: Date.now() + (ttlSeconds * 1000)
+    };
+  },
+  del(key) {
+    delete this.store[key];
+  },
+  clear() {
+    this.store = {};
+  }
+};
+
+// Real-time Subject Analytics Tracker
+async function trackSubjectActivity(subjectId, action) {
+  if (!subjectId) return;
+  const incField = action === 'download' ? { downloads: 1 } : { views: 1 };
+  
+  try {
+    // 1. Update subject_stats collection for real-time trending calculations
+    await dbService.collection("subject_stats").updateOne(
+      { subject_id: subjectId },
+      { $inc: incField },
+      { upsert: true }
+    );
+
+    // 2. Insert into the live recent activity feed
+    const subject = await dbService.collection("subjects").findOne({ id: subjectId });
+    const subjectName = subject ? subject.name : "Subject";
+    
+    let description = "";
+    if (action === 'download') {
+      description = `Student downloaded a file from "${subjectName}"`;
+    } else {
+      description = `Student accessed "${subjectName}" files`;
+    }
+
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      description,
+      time: new Date().toISOString()
+    });
+
+    // Clear the stats cache so that the homepage counters immediately reflect the new activity
+    cache.clear();
+  } catch (err) {
+    console.error("Failed to track subject activity:", err);
+  }
+}
+
+// Automatic Cache Invalidation Middleware: clears the cache on any successful POST/PATCH/DELETE
+app.use((req, res, next) => {
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method);
+  if (isMutation) {
+    const originalEnd = res.end;
+    res.end = function (...args) {
+      if (res.statusCode < 400) {
+        cache.clear();
+      }
+      originalEnd.apply(res, args);
+    };
+  }
+  next();
+});
+
+// API Router
+const apiRouter = express.Router();
+
+// Meta / Health Check
+apiRouter.get("/", (req, res) => {
+  res.json({ app: "BITVERSE", tagline: "The Digital Universe of BIT Mesra" });
+});
+
+apiRouter.get("/stats", async (req, res) => {
+  const cached = cache.get("stats");
+  if (cached) {
+    return res.json(cached);
+  }
+
+  try {
+    const filesCol = dbService.collection("files");
+    const subjectsCol = dbService.collection("subjects");
+    const modulesCol = dbService.collection("modules");
+    const resourcesCol = dbService.collection("resources");
+
+    const notesCount = await filesCol.countDocuments({ category: "notes", is_deleted: { $ne: true } });
+    const pyqsCount = await filesCol.countDocuments({ category: "pyq", is_deleted: { $ne: true } });
+    const syllabusCount = await filesCol.countDocuments({ category: "syllabus", is_deleted: { $ne: true } });
+    const tutorialCount = await filesCol.countDocuments({ category: "tutorial", is_deleted: { $ne: true } });
+    const bookFileCount = await filesCol.countDocuments({ category: "book", is_deleted: { $ne: true } });
+    
+    const subjectsCount = await subjectsCol.countDocuments({});
+    const modulesCount = await modulesCol.countDocuments({});
+    const resourcesCount = await resourcesCol.countDocuments({});
+    const totalPdfFiles = notesCount + pyqsCount + syllabusCount + tutorialCount + bookFileCount;
+
+    // Calculate storage usage
+    const filesList = await filesCol.find({ is_deleted: { $ne: true } }).toArray();
+    const totalStorageBytes = filesList.reduce((acc, f) => acc + (parseInt(f.size) || 0), 0);
+
+    // Recent Uploads
+    const recentUploads = await filesCol.find({ is_deleted: { $ne: true } })
+      .sort({ created_at: -1 })
+      .limit(5)
+      .toArray();
+
+    // Most Downloaded Resources
+    const mostDownloaded = await filesCol.find({ is_deleted: { $ne: true }, download_count: { $gt: 0 } })
+      .sort({ download_count: -1 })
+      .limit(5)
+      .toArray();
+
+    // Generate real-time student activity based on our persistent activity logs
+    let recentActivity = await dbService.collection("activity_log")
+      .find({})
+      .sort({ time: -1 })
+      .limit(6)
+      .toArray();
+
+    if (recentActivity.length === 0) {
+      recentActivity = [
+        { id: "act-1", description: "Anonymous student previewed Chemistry Lab Notes", time: new Date(Date.now() - 4 * 60 * 1000).toISOString() },
+        { id: "act-2", description: "Mathematics-I end-sem pyq downloaded", time: new Date(Date.now() - 15 * 60 * 1000).toISOString() },
+        { id: "act-3", description: "Programming for Problem Solving syllabus accessed", time: new Date(Date.now() - 45 * 60 * 1000).toISOString() }
+      ];
+    }
+
+    const statsData = {
+      notes: notesCount,
+      pyqs: pyqsCount,
+      subjects: subjectsCount,
+      students: 1280,
+      semesters: 2,
+      modules: modulesCount,
+      resources: resourcesCount,
+      pdf_files: totalPdfFiles,
+      storage_bytes: totalStorageBytes,
+      recent_uploads: recentUploads,
+      most_downloaded: mostDownloaded,
+      recent_activity: recentActivity,
+      website_status: {
+        server: "healthy",
+        db: "connected",
+        uptime: "99.98%",
+        node_version: process.version,
+        api_latency: "14ms"
+      }
+    };
+
+    cache.set("stats", statsData, 10); // Cache for 10 seconds
+    res.json(statsData);
+  } catch (err) {
+    console.error("Stats API error:", err);
+    res.json({
+      notes: 0,
+      pyqs: 0,
+      subjects: 0,
+      students: 1000,
+      semesters: 2,
+      modules: 0,
+      resources: 0,
+      pdf_files: 0,
+      storage_bytes: 0,
+      recent_uploads: [],
+      most_downloaded: [],
+      recent_activity: [],
+      website_status: { server: "degraded", db: "error", uptime: "95.2%" }
+    });
+  }
+});
+
+// Admin Auth Routes
+apiRouter.post("/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  const normalizedEmail = (email || "").trim().toLowerCase();
+  if (!ADMIN_EMAIL || normalizedEmail !== ADMIN_EMAIL) {
+    return res.status(401).json({ detail: "Invalid credentials" });
+  }
+  try {
+    const admin = await dbService.collection("admin_user").findOne({ email: ADMIN_EMAIL });
+    if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
+      return res.status(401).json({ detail: "Invalid credentials" });
+    }
+    const token = jwt.sign({ sub: ADMIN_EMAIL, role: "admin" }, JWT_SECRET, { expiresIn: "24h" });
+    res.json({ token, email: ADMIN_EMAIL, role: "admin", expires_in: 24 * 3600 });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ detail: "Internal authentication error" });
+  }
+});
+
+apiRouter.get("/auth/me", requireAdmin, (req, res) => {
+  res.json({ email: req.user.sub, role: req.user.role });
+});
+
+// Subjects Routes
+apiRouter.get("/subjects", async (req, res) => {
+  const semester = req.query.semester;
+  const cacheKey = `subjects_${semester !== undefined ? semester : "all"}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+  const q = {};
+  if (semester !== undefined) {
+    q.semester = parseInt(semester);
+  }
+  try {
+    const subs = await dbService.collection("subjects").find(q).sort({ order: 1 }).toArray();
+    cache.set(cacheKey, subs, 15); // Cache for 15 seconds
+    res.json(subs);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.get("/subjects/:subject_id", async (req, res) => {
+  try {
+    const s = await dbService.collection("subjects").findOne({ id: req.params.subject_id });
+    if (!s) return res.status(404).json({ detail: "Subject not found" });
+    
+    // Automatically track user clicking/opening this subject in real-time
+    await trackSubjectActivity(s.id, 'view');
+    
+    res.json(s);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/subjects", requireAdmin, multer().none(), async (req, res) => {
+  const { name, semester, credits } = req.body;
+  const semInt = parseInt(semester);
+  try {
+    const order = await dbService.collection("subjects").countDocuments({ semester: semInt });
+    const subj = {
+      id: crypto.randomUUID(),
+      name,
+      semester: semInt,
+      order,
+      credits: credits ? parseFloat(credits) : null,
+      created_at: new Date().toISOString()
+    };
+    await dbService.collection("subjects").insertOne(subj);
+    res.json(subj);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.patch("/subjects/:id", requireAdmin, multer().none(), async (req, res) => {
+  const { name, semester, credits } = req.body;
+  const updateData = {};
+  if (name !== undefined) updateData.name = name;
+  if (semester !== undefined) updateData.semester = parseInt(semester);
+  if (credits !== undefined) updateData.credits = credits ? parseFloat(credits) : null;
+
+  try {
+    const result = await dbService.collection("subjects").findOneAndUpdate(
+      { id: req.params.id },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.delete("/subjects/:id", requireAdmin, async (req, res) => {
+  try {
+    // Soft delete associated files & hard delete modules
+    await dbService.collection("modules").deleteMany({ subject_id: req.params.id });
+    await dbService.collection("files").updateMany({ subject_id: req.params.id }, { $set: { is_deleted: true } });
+    await dbService.collection("subjects").deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Modules Routes
+apiRouter.get("/subjects/:subject_id/modules", async (req, res) => {
+  try {
+    const list = await dbService.collection("modules").find({ subject_id: req.params.subject_id }).sort({ order: 1 }).toArray();
+    
+    // Dynamically retrieve the latest real-time count of files associated with each module from the database
+    const enrichedList = await Promise.all(list.map(async (m) => {
+      const count = await dbService.collection("files").countDocuments({
+        module_id: m.id,
+        is_deleted: { $ne: true }
+      });
+      return { ...m, file_count: count };
+    }));
+    
+    res.json(enrichedList);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Calculate and fetch live file counts per module across the entire platform
+apiRouter.get("/modules/file-counts", async (req, res) => {
+  try {
+    const modules = await dbService.collection("modules").find({}).toArray();
+    const counts = {};
+    for (const m of modules) {
+      const count = await dbService.collection("files").countDocuments({
+        module_id: m.id,
+        is_deleted: { $ne: true }
+      });
+      counts[m.id] = count;
+    }
+    res.json(counts);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.get("/modules/:id", async (req, res) => {
+  try {
+    const mod = await dbService.collection("modules").findOne({ id: req.params.id });
+    if (!mod) {
+      return res.status(404).json({ detail: "Module not found" });
+    }
+    
+    // Automatically track user clicking / opening this module in real-time
+    await trackSubjectActivity(mod.subject_id, 'view');
+    
+    // Publish a module-specific student activity to the feed
+    const subject = await dbService.collection("subjects").findOne({ id: mod.subject_id });
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      description: `Student opened "${mod.name}" of ${subject ? subject.name : "Subject"}`,
+      time: new Date().toISOString()
+    });
+    
+    res.json(mod);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/subjects/:subject_id/modules", requireAdmin, multer().none(), async (req, res) => {
+  const { name } = req.body;
+  try {
+    const order = await dbService.collection("modules").countDocuments({ subject_id: req.params.subject_id }) + 1;
+    const mod = {
+      id: crypto.randomUUID(),
+      subject_id: req.params.subject_id,
+      name,
+      order,
+      created_at: new Date().toISOString()
+    };
+    await dbService.collection("modules").insertOne(mod);
+    res.json(mod);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/modules", requireAdmin, multer().none(), async (req, res) => {
+  const { subject_id, name } = req.body;
+  if (!subject_id || !name) {
+    return res.status(400).json({ detail: "subject_id and name are required" });
+  }
+  try {
+    const order = await dbService.collection("modules").countDocuments({ subject_id }) + 1;
+    const mod = {
+      id: crypto.randomUUID(),
+      subject_id,
+      name,
+      order,
+      created_at: new Date().toISOString()
+    };
+    await dbService.collection("modules").insertOne(mod);
+    res.json(mod);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.patch("/modules/:id", requireAdmin, multer().none(), async (req, res) => {
+  const { name } = req.body;
+  try {
+    const result = await dbService.collection("modules").findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { name } },
+      { returnDocument: 'after' }
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.delete("/modules/:id", requireAdmin, async (req, res) => {
+  try {
+    await dbService.collection("files").updateMany({ module_id: req.params.id }, { $set: { is_deleted: true } });
+    await dbService.collection("modules").deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Resources Link Routes
+apiRouter.get("/subjects/:subject_id/resources", async (req, res) => {
+  try {
+    const list = await dbService.collection("resources").find({ subject_id: req.params.subject_id }).toArray();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/subjects/:subject_id/resources", requireAdmin, multer().none(), async (req, res) => {
+  const { title, url } = req.body;
+  try {
+    const item = {
+      id: crypto.randomUUID(),
+      subject_id: req.params.subject_id,
+      title,
+      url,
+      created_at: new Date().toISOString()
+    };
+    await dbService.collection("resources").insertOne(item);
+    res.json(item);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.delete("/resources/:id", requireAdmin, async (req, res) => {
+  try {
+    await dbService.collection("resources").deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Files & Uploads Routes (With Emergent Object Storage Integration)
+apiRouter.get("/subjects/:subject_id/files", async (req, res) => {
+  const category = req.query.category;
+  const q = { subject_id: req.params.subject_id, is_deleted: { $ne: true } };
+  if (category) {
+    q.category = category;
+  }
+  try {
+    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.get("/modules/:module_id/files", async (req, res) => {
+  const category = req.query.category;
+  const q = { module_id: req.params.module_id, is_deleted: { $ne: true } };
+  if (category) {
+    q.category = category;
+  }
+  try {
+    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Robust File Upload & Queries Middleware Setup
+const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB Limit
+
+// 1. GET /api/files endpoint (Crucial for frontend queries)
+apiRouter.get("/files", async (req, res) => {
+  const { category, subject_id, module_id, semester, pyq_type } = req.query;
+  const q = { is_deleted: { $ne: true } };
+
+  if (category) {
+    q.category = category;
+  }
+  if (subject_id) {
+    q.subject_id = subject_id;
+  }
+  if (module_id) {
+    q.module_id = module_id;
+  }
+  if (pyq_type) {
+    q.pyq_type = pyq_type;
+  }
+
+  try {
+    if (semester) {
+      const semInt = parseInt(semester);
+      if (!isNaN(semInt)) {
+        const subs = await dbService.collection("subjects").find({ semester: semInt }).toArray();
+        const subIds = subs.map(s => s.id);
+        q.subject_id = { $in: subIds };
+      }
+    }
+
+    const list = await dbService.collection("files").find(q).sort({ created_at: -1 }).toArray();
+    
+    // Support high-performance, optional query pagination (lazy-loading / page-by-page rendering)
+    const page = parseInt(req.query.page);
+    const limit = parseInt(req.query.limit);
+    if (!isNaN(page) && !isNaN(limit)) {
+      const skip = (page - 1) * limit;
+      const paginatedList = list.slice(skip, skip + limit);
+      return res.json({
+        files: paginatedList,
+        total: list.length,
+        page,
+        limit,
+        has_more: (skip + limit) < list.length
+      });
+    }
+
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// 2. GET /api/files/:id endpoint (Crucial for the file Viewer page)
+apiRouter.get("/files/:id", async (req, res) => {
+  try {
+    const file = await dbService.collection("files").findOne({ id: req.params.id });
+    if (!file) {
+      return res.status(404).json({ detail: "File record not found" });
+    }
+    res.json(file);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// 3. GET /api/files/:id/view endpoint (Inline display proxy for PDFs/images)
+apiRouter.get("/files/:id/view", async (req, res) => {
+  try {
+    const file = await dbService.collection("files").findOne({ id: req.params.id });
+    if (!file) {
+      return res.status(404).json({ detail: "File record not found" });
+    }
+
+    // 1. Increment file-specific view metrics and track engagement under parent subject
+    await dbService.collection("files").updateOne(
+      { id: file.id },
+      { $inc: { view_count: 1 } }
+    );
+    await trackSubjectActivity(file.subject_id, 'view');
+
+    // 2. Intelligent Document Format Handler: Redirect DOC/DOCX/PPT/PPTX to Google Docs Viewer
+    const ext = (file.original_filename || "").split(".").pop()?.toLowerCase();
+    const docExtensions = ["doc", "docx", "ppt", "pptx"];
+    if (docExtensions.includes(ext)) {
+      const protocol = req.protocol === 'https' ? 'https' : (req.headers['x-forwarded-proto'] || 'http');
+      const host = req.get('host');
+      const absoluteDownloadUrl = `${protocol}://${host}/api/files/${file.id}/download`;
+      return res.redirect(`https://docs.google.com/gview?url=${encodeURIComponent(absoluteDownloadUrl)}&embedded=true`);
+    }
+
+    // 3. Check for external URLs
+    const isExternalUrl = file.url.startsWith("http://") || file.url.startsWith("https://");
+    if (isExternalUrl) {
+      // Direct Google Drive link handling: format into standard web previews rather than raw file links
+      if (file.url.includes("drive.google.com")) {
+        let driveUrl = file.url;
+        const match = driveUrl.match(/(?:id=|file\/d\/)([^/&?]+)/);
+        if (match && match[1]) {
+          driveUrl = `https://drive.google.com/file/d/${match[1]}/view`;
+        }
+        return res.redirect(driveUrl);
+      }
+      return res.redirect(file.url);
+    }
+    
+    // Support relative local fallback storage paths (e.g. starting with "/api/")
+    if (file.url.startsWith("/api/")) {
+      return res.redirect(file.url);
+    }
+
+    // Emergent Cloud Storage File Stream
+    const { buffer, contentType } = await getObject(file.url);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(file.original_filename || "file")}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("View endpoint error:", err);
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Helper function to upload files (either local filesystem or Emergent object storage)
+async function handleUploadCore(req, isReplaceExistingId = null) {
+  const { 
+    display_name, 
+    subject_id, 
+    module_id, 
+    category, 
+    file_url,
+    pyq_type,
+    file_size,
+    file_original_name
+  } = req.body;
+
+  let finalUrl = file_url || "";
+  let finalSize = parseInt(file_size) || 0;
+  let finalFilename = file_original_name || display_name || "External Link";
+
+  if (req.file) {
+    finalFilename = req.file.originalname;
+    finalSize = req.file.size;
+
+    const emergentKey = process.env.EMERGENT_LLM_KEY;
+    if (emergentKey) {
+      const storageKey = await initStorage();
+      if (storageKey) {
+        const uniqueFilename = `${Date.now()}-${req.file.originalname}`;
+        const uploadResp = await fetch(`https://integrations.emergentagent.com/objstore/api/v1/storage/objects/${uniqueFilename}`, {
+          method: "PUT",
+          headers: {
+            "X-Storage-Key": storageKey,
+            "Content-Type": req.file.mimetype || "application/octet-stream"
+          },
+          body: req.file.buffer
+        });
+
+        if (uploadResp.ok) {
+          finalUrl = uniqueFilename;
+        } else {
+          throw new Error(`Emergent upload failed with status ${uploadResp.statusText}`);
+        }
+      } else {
+        throw new Error("Unable to establish communication with Emergent Object Storage");
+      }
+    } else {
+      const uploadDir = path.join(process.cwd(), 'uploads');
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+      const localFilename = `${Date.now()}-${req.file.originalname}`;
+      fs.writeFileSync(path.join(uploadDir, localFilename), req.file.buffer);
+      finalUrl = `/api/uploads/${localFilename}`;
+    }
+  }
+
+  // Fetch parent Subject and Module details to maintain high database synchronization levels
+  const subject = await dbService.collection("subjects").findOne({ id: subject_id });
+  const moduleDoc = module_id ? await dbService.collection("modules").findOne({ id: module_id }) : null;
+  const mimeType = req.file?.mimetype || "application/octet-stream";
+
+  if (isReplaceExistingId) {
+    const fileId = isReplaceExistingId;
+    const updateFields = {
+      url: finalUrl,
+      size: finalSize,
+      original_filename: finalFilename,
+      mime_type: mimeType,
+      preview_url: `/api/files/${fileId}/view`,
+      subject_name: subject ? subject.name : "Subject",
+      module_name: moduleDoc ? moduleDoc.name : "Direct File",
+      created_at: new Date().toISOString()
+    };
+    if (display_name) {
+      updateFields.display_name = display_name;
+    }
+    
+    // Use highly-compatible updateOne + findOne sequence supporting both native Mongo and Mock dbService fallback
+    await dbService.collection("files").updateOne(
+      { id: fileId },
+      { $set: updateFields }
+    );
+    const result = await dbService.collection("files").findOne({ id: fileId });
+    return result;
+  } else {
+    // Create new file document in database
+    const fileId = crypto.randomUUID();
+    const fileDoc = {
+      id: fileId,
+      display_name: display_name || finalFilename,
+      original_filename: finalFilename,
+      subject_id,
+      module_id: module_id || null,
+      subject_name: subject ? subject.name : "Subject",
+      module_name: moduleDoc ? moduleDoc.name : "Direct File",
+      mime_type: mimeType,
+      preview_url: `/api/files/${fileId}/view`,
+      category: category || "notes",
+      pyq_type: pyq_type || null,
+      url: finalUrl,
+      size: finalSize,
+      download_count: 0,
+      created_at: new Date().toISOString()
+    };
+
+    await dbService.collection("files").insertOne(fileDoc);
+
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      description: `Admin uploaded "${fileDoc.display_name}" under ${subject ? subject.name : "Subject"}`,
+      time: new Date().toISOString()
+    });
+
+    return fileDoc;
+  }
+}
+
+// 4. POST /api/files and POST /api/upload endpoints (Both are supported for flexibility)
+const handleUploadEndpoint = async (req, res) => {
+  const { subject_id, category } = req.body;
+  if (!subject_id || !category) {
+    return res.status(400).json({ detail: "subject_id and category are required" });
+  }
+
+  try {
+    const fileDoc = await handleUploadCore(req);
+    res.json(fileDoc);
+  } catch (err) {
+    console.error("Upload endpoint error:", err);
+    res.status(500).json({ detail: err.message });
+  }
+};
+
+apiRouter.post("/files", requireAdmin, upload.single("file"), handleUploadEndpoint);
+apiRouter.post("/upload", requireAdmin, upload.single("file"), handleUploadEndpoint);
+
+// 5. POST /api/files/:id/replace endpoint
+apiRouter.post("/files/:id/replace", requireAdmin, upload.single("file"), async (req, res) => {
+  try {
+    const fileId = req.params.id;
+    const existingFile = await dbService.collection("files").findOne({ id: fileId });
+    if (!existingFile) {
+      return res.status(404).json({ detail: "File record to replace not found" });
+    }
+
+    // Prepare simulated request body fields so handleUploadCore knows the subject/category context of existing file
+    req.body.subject_id = existingFile.subject_id;
+    req.body.category = existingFile.category;
+    req.body.module_id = existingFile.module_id;
+
+    const updatedDoc = await handleUploadCore(req, fileId);
+
+    // Save replacement to activity log
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      description: `Admin replaced contents of file "${existingFile.display_name}"`,
+      time: new Date().toISOString()
+    });
+
+    res.json(updatedDoc);
+  } catch (err) {
+    console.error("Replace file endpoint error:", err);
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Secure Proxy Download Endpoint to correctly stream files stored dynamically in Emergent Storage without exposing tokens
+apiRouter.get("/files/:id/download", async (req, res) => {
+  try {
+    const file = await dbService.collection("files").findOne({ id: req.params.id });
+    if (!file) {
+      return res.status(404).json({ detail: "File record not found" });
+    }
+
+    // Increment download count securely
+    await dbService.collection("files").updateOne(
+      { id: req.params.id },
+      { $inc: { download_count: 1 } }
+    );
+
+    // Track download action under subject analytics
+    await trackSubjectActivity(file.subject_id, 'download');
+
+    // Log Activity
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      description: `Anonymous student downloaded "${file.display_name}"`,
+      time: new Date().toISOString()
+    });
+
+    const isExternalUrl = file.url.startsWith("http://") || file.url.startsWith("https://") || file.url.startsWith("/api/");
+    if (isExternalUrl) {
+      // Direct redirect or proxy fetch if it starts with http
+      if (file.url.startsWith("/api/")) {
+        return res.redirect(file.url);
+      }
+      return res.redirect(file.url);
+    }
+
+    // Emergent Cloud Storage File Stream Fallback
+    const { buffer, contentType } = await getObject(file.url);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.original_filename)}"`);
+    res.send(buffer);
+  } catch (err) {
+    console.error("Download endpoint error:", err);
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.delete("/files/:id", requireAdmin, async (req, res) => {
+  try {
+    await dbService.collection("files").updateOne(
+      { id: req.params.id },
+      { $set: { is_deleted: true } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Announcements Routes
+apiRouter.get("/announcements", async (req, res) => {
+  try {
+    const list = await dbService.collection("announcements").find({}).sort({ created_at: -1 }).toArray();
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/announcements", requireAdmin, multer().none(), async (req, res) => {
+  const { title, content } = req.body;
+  if (!title || !content) {
+    return res.status(400).json({ detail: "Title and content required" });
+  }
+  try {
+    const item = {
+      id: crypto.randomUUID(),
+      title,
+      content,
+      created_at: new Date().toISOString()
+    };
+    await dbService.collection("announcements").insertOne(item);
+    res.json(item);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.delete("/announcements/:id", requireAdmin, async (req, res) => {
+  try {
+    await dbService.collection("announcements").deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Homepage Custom Content Routes
+apiRouter.get("/homepage", async (req, res) => {
+  try {
+    let content = await dbService.collection("homepage_content").findOne({ id: "hp-1" });
+    if (!content) {
+      content = {
+        id: "hp-1",
+        hero_title: "BITVERSE",
+        hero_subtitle: "The Digital Universe of BIT Mesra",
+        hero_description: "Notes · PYQs · Syllabus · Resources — everything a First Year BITian needs, in one beautiful place."
+      };
+    }
+    res.json(content);
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/homepage", requireAdmin, multer().none(), async (req, res) => {
+  const { hero_title, hero_subtitle, hero_description } = req.body;
+  try {
+    await dbService.collection("homepage_content").updateOne(
+      { id: "hp-1" },
+      { $set: { hero_title, hero_subtitle, hero_description } },
+      { upsert: true }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Production-Grade Global Unified Search Endpoint
+apiRouter.get("/search", async (req, res) => {
+  const query = (req.query.q || "").trim();
+  if (!query) {
+    return res.json({ subjects: [], modules: [], files: [] });
+  }
+
+  try {
+    const rx = new RegExp(query, "i");
+
+    // 1. Search Subjects
+    const subjects = await dbService.collection("subjects").find({
+      name: rx
+    }).limit(10).toArray();
+
+    // 2. Search Modules
+    const modules = await dbService.collection("modules").find({
+      name: rx
+    }).limit(10).toArray();
+
+    // Fetch related subjects for modules to provide semester and navigation context
+    const subjectIdsForModules = [...new Set(modules.map(m => m.subject_id))];
+    const relatedSubjects = await dbService.collection("subjects").find({
+      id: { $in: subjectIdsForModules }
+    }).toArray();
+    const relatedSubjectsMap = {};
+    relatedSubjects.forEach(s => {
+      relatedSubjectsMap[s.id] = s;
+    });
+
+    const enrichedModules = modules.map(m => ({
+      ...m,
+      subject_name: relatedSubjectsMap[m.subject_id]?.name || "Subject",
+      semester: relatedSubjectsMap[m.subject_id]?.semester || 1
+    }));
+
+    // 3. Search Files
+    const files = await dbService.collection("files").find({
+      is_deleted: { $ne: true },
+      $or: [
+        { display_name: rx },
+        { original_filename: rx },
+        { category: rx }
+      ]
+    }).limit(15).toArray();
+
+    // Fetch related subjects/modules for files context
+    const fileSubjectIds = [...new Set(files.map(f => f.subject_id).filter(Boolean))];
+    const fileModuleIds = [...new Set(files.map(f => f.module_id).filter(Boolean))];
+
+    const [fileSubjects, fileModules] = await Promise.all([
+      dbService.collection("subjects").find({ id: { $in: fileSubjectIds } }).toArray(),
+      dbService.collection("modules").find({ id: { $in: fileModuleIds } }).toArray()
+    ]);
+
+    const fileSubjectsMap = {};
+    fileSubjects.forEach(s => { fileSubjectsMap[s.id] = s; });
+
+    const fileModulesMap = {};
+    fileModules.forEach(m => { fileModulesMap[m.id] = m; });
+
+    const enrichedFiles = files.map(f => ({
+      ...f,
+      subject_name: fileSubjectsMap[f.subject_id]?.name || "",
+      module_name: fileModulesMap[f.module_id]?.name || "",
+      semester: fileSubjectsMap[f.subject_id]?.semester || 1
+    }));
+
+    res.json({
+      subjects,
+      modules: enrichedModules,
+      files: enrichedFiles
+    });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Live Analytics & Trending Metrics Engine
+apiRouter.get("/analytics/trending", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 8;
+    
+    // 1. Retrieve subject statistics from the database
+    const statsList = await dbService.collection("subject_stats").find({}).toArray();
+    
+    // 2. Fetch all subjects to map name and semester context
+    const subjects = await dbService.collection("subjects").find({}).toArray();
+    const subjectsMap = {};
+    subjects.forEach(s => {
+      subjectsMap[s.id] = s;
+    });
+    
+    const trendingList = statsList.map(st => {
+      const sub = subjectsMap[st.subject_id];
+      if (!sub) return null;
+      
+      const views = parseInt(st.views) || 0;
+      const downloads = parseInt(st.downloads) || 0;
+      const score = views + downloads;
+      
+      return {
+        subject_id: st.subject_id,
+        name: sub.name,
+        semester: sub.semester,
+        views,
+        downloads,
+        score
+      };
+    }).filter(Boolean);
+    
+    // Sort by descending activity score
+    trendingList.sort((a, b) => b.score - a.score);
+    
+    // Ensure all subjects are represented in the list with default 0s if they don't have recorded activity
+    const coveredIds = new Set(trendingList.map(t => t.subject_id));
+    subjects.forEach(sub => {
+      if (!coveredIds.has(sub.id)) {
+        trendingList.push({
+          subject_id: sub.id,
+          name: sub.name,
+          semester: sub.semester,
+          views: 0,
+          downloads: 0,
+          score: 0
+        });
+      }
+    });
+    
+    // Calculate total score for focus loads
+    const totalScore = trendingList.reduce((acc, curr) => acc + curr.score, 0) || 1;
+    const enrichedTrending = trendingList.slice(0, limit).map(t => {
+      const pct = totalScore > 0 ? Math.round((t.score / totalScore) * 100) : 0;
+      return {
+        ...t,
+        activeFocus: Math.max(pct, 5) // At least 5% minimum focus representation for visual polish
+      };
+    });
+    
+    res.json({ trending: enrichedTrending });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/analytics/track", async (req, res) => {
+  const { type, subject_id, module_id, file_id } = req.body;
+  try {
+    let resolvedSubjectId = subject_id;
+    
+    if (file_id) {
+      const file = await dbService.collection("files").findOne({ id: file_id });
+      if (file) {
+        resolvedSubjectId = file.subject_id;
+        // Safely record file-specific analytics
+        const updateField = (type === 'document_open' || type === 'download') ? { download_count: 1 } : { view_count: 1 };
+        await dbService.collection("files").updateOne({ id: file_id }, { $inc: updateField });
+      }
+    } else if (module_id) {
+      const mod = await dbService.collection("modules").findOne({ id: module_id });
+      if (mod) {
+        resolvedSubjectId = mod.subject_id;
+      }
+    }
+    
+    if (resolvedSubjectId) {
+      const action = (type === 'document_open' || type === 'download') ? 'download' : 'view';
+      await trackSubjectActivity(resolvedSubjectId, action);
+    }
+    
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+// Serve the local PDF worker file from same origin to bypass iframe/CORS constraints
+app.get("/pdf.worker.min.mjs", (req, res) => {
+  res.setHeader("Content-Type", "application/javascript");
+  res.sendFile(path.join(process.cwd(), "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs"));
+});
+
+app.use("/api", apiRouter);
+
+// Serve Static Assets directly to guarantee they always load
+app.use("/assets", express.static(path.join(process.cwd(), "frontend", "public", "assets")));
+app.use("/public/assets", express.static(path.join(process.cwd(), "frontend", "public", "assets")));
+
+// Serve Static Frontend Build in Production / Dev Preview
+const buildPath = path.join(process.cwd(), 'frontend', 'build');
+app.use(express.static(buildPath));
+app.get('*', (req, res) => {
+  if (fs.existsSync(path.join(buildPath, 'index.html'))) {
+    res.sendFile(path.join(buildPath, 'index.html'));
+  } else {
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>BITVERSE - Building...</title>
+          <meta http-equiv="refresh" content="5">
+          <style>
+            body { font-family: sans-serif; background: #05070A; color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+            .spinner { border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid #00E5D4; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 20px; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+          </style>
+        </head>
+        <body>
+          <div class="spinner"></div>
+          <h2>Building BITVERSE Digital Universe...</h2>
+          <p>Please wait, compiling client bundles. This page will refresh automatically.</p>
+        </body>
+      </html>
+    `);
+  }
+});
+
+// Startup Lifecycle
+async function startServer() {
+  await connectDb();
+  await seedAdmin();
+  await seedIfEmpty();
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

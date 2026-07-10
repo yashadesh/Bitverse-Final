@@ -1,0 +1,8 @@
+{
+  "name": "BITVERSE",
+  "description": "The Digital Universe of BIT Mesra. Academic library of notes, PYQs, syllabus & resources for First Year BITians.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

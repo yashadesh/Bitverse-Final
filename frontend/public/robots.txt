@@ -1,0 +1,11 @@
+# Host
+Host: https://bitverse.vercel.app
+
+# Paths
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+
+# Sitemap
+Sitemap: https://bitverse.vercel.app/sitemap.xml
