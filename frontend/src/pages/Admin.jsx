@@ -103,7 +103,7 @@ export default function Admin() {
           <DashboardOverview />
         )}
         {tab === "notes" && (
-          <UploadNotes subjects={subjects} modules={modules} onSubject={loadModules} refresh={loadAll} />
+          <UploadNotes subjects={subjects} refresh={loadAll} />
         )}
         {tab === "tutorial" && (
           <UploadTutorial subjects={subjects} refresh={loadAll} />
@@ -123,8 +123,8 @@ export default function Admin() {
         {tab === "manage" && (
           <>
             <AddSubject refresh={loadAll} />
-            <AddModule subjects={subjects} modules={modules} onSubject={loadModules} refresh={loadAll} />
-            <SubjectsManager subjects={subjects} modules={modules} onSubject={loadModules} refresh={loadAll} />
+            <AddModule subjects={subjects} refresh={loadAll} />
+            <SubjectsManager subjects={subjects} refresh={loadAll} onSubject={loadModules} />
           </>
         )}
         {tab === "folder" && (
@@ -318,8 +318,10 @@ function Field({ label, children }) {
 }
 const inp = "w-full px-4 py-2.5 rounded-xl bg-[#0D1117]/70 border border-white/10 text-white text-sm focus:outline-none focus:border-[#00E5D4]/60 focus:ring-2 focus:ring-[#00E5D4]/20";
 
-function UploadNotes({ subjects, modules, onSubject, refresh }) {
+function UploadNotes({ subjects, refresh }) {
   const [subjectId, setSubjectId] = useState("");
+  const [modules, setModules] = useState([]);
+  const [loadingModules, setLoadingModules] = useState(false);
   const [moduleId, setModuleId] = useState("");
   const [file, setFile] = useState(null);
   const [fileUrl, setFileUrl] = useState("");
@@ -327,7 +329,20 @@ function UploadNotes({ subjects, modules, onSubject, refresh }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const isDirect = subjectId ? (modules.length === 0) : true;
+  useEffect(() => {
+    if (!subjectId) {
+      setModules([]);
+      setLoadingModules(false);
+      return;
+    }
+    setLoadingModules(true);
+    api.get(`/subjects/${subjectId}/modules`)
+      .then(({ data }) => setModules(data))
+      .catch(() => setModules([]))
+      .finally(() => setLoadingModules(false));
+  }, [subjectId]);
+
+  const isDirect = subjectId ? (!loadingModules && modules.length === 0) : true;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -375,14 +390,16 @@ function UploadNotes({ subjects, modules, onSubject, refresh }) {
     <GlassBox title="Upload Notes" testid="admin-upload-notes">
       <form onSubmit={submit}>
         <Field label="Subject">
-          <select className={inp} value={subjectId} onChange={(e)=>{setSubjectId(e.target.value); setModuleId(""); onSubject(e.target.value);}} data-testid="admin-notes-subject">
+          <select className={inp} value={subjectId} onChange={(e)=>{setSubjectId(e.target.value); setModuleId("");}} data-testid="admin-notes-subject">
             <option value="">Select subject…</option>
             {subjects.map((s) => (
               <option key={s.id} value={s.id}>Sem {s.semester}{s.semester === 1 ? " (C)" : " (P)"} · {s.name}</option>
             ))}
           </select>
         </Field>
-        {isDirect ? (
+        {loadingModules ? (
+          <div className="mb-4 text-xs font-mono text-white/50 animate-pulse">Loading modules...</div>
+        ) : isDirect ? (
           <div className="mb-4 chip">Direct-file subject (No modules created)</div>
         ) : (
           <Field label="Module">
@@ -845,10 +862,28 @@ function AddSubject({ refresh }) {
   );
 }
 
-function AddModule({ subjects, modules, onSubject, refresh }) {
+function AddModule({ subjects, refresh }) {
   const [subjectId, setSubjectId] = useState("");
+  const [modules, setModules] = useState([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const loadLocalModules = async (subId) => {
+    if (!subId) {
+      setModules([]);
+      return;
+    }
+    try {
+      const { data } = await api.get(`/subjects/${subId}/modules`);
+      setModules(data);
+    } catch {
+      setModules([]);
+    }
+  };
+
+  useEffect(() => {
+    loadLocalModules(subjectId);
+  }, [subjectId]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -861,7 +896,7 @@ function AddModule({ subjects, modules, onSubject, refresh }) {
       await api.post("/modules", fd);
       toast.success("Module added");
       setName("");
-      onSubject(subjectId);
+      loadLocalModules(subjectId);
       refresh();
     } catch { toast.error("Failed"); }
     setBusy(false);
@@ -871,7 +906,7 @@ function AddModule({ subjects, modules, onSubject, refresh }) {
     <GlassBox title="Add Module" testid="admin-add-module">
       <form onSubmit={submit}>
         <Field label="Subject">
-          <select className={inp} value={subjectId} onChange={(e)=>{setSubjectId(e.target.value); onSubject(e.target.value);}} data-testid="admin-module-subject">
+          <select className={inp} value={subjectId} onChange={(e)=>setSubjectId(e.target.value)} data-testid="admin-module-subject">
             <option value="">Select subject…</option>
             {subjects.map((s) => (<option key={s.id} value={s.id}>Sem {s.semester}{s.semester === 1 ? " (C)" : " (P)"} · {s.name}</option>))}
           </select>

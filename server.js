@@ -1009,7 +1009,7 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
   if (req.file) {
     finalFilename = req.file.originalname;
     finalSize = req.file.size;
-    if (req.file.size < 15 * 1024 * 1024) {
+    if (req.file.size < 8 * 1024 * 1024) {
       fileDataB64 = req.file.buffer.toString("base64");
     }
 

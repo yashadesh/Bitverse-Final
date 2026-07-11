@@ -25,7 +25,7 @@ function SyllabusCard({ n, subs, files }) {
       </ul>
       {files.length > 0 && (
         <div className="mt-6 space-y-2">
-          <div className="text-xs font-mono text-white/50 uppercase tracking-widest">Downloadable Syllabi</div>
+          <div className="text-xs font-mono text-white/50 uppercase tracking-widest">Official Syllabi</div>
           {files.map((f) => <FileCard key={f.id} file={f} apiBase={API} />)}
         </div>
       )}

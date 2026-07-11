@@ -60,7 +60,7 @@ export default function SubjectPage() {
 
   const kind = classify(subject?.name);
   const showModules = kind === "modules" && modules.length > 0;
-  const primaryFiles = kind === "books" ? books : directFiles;
+  const primaryFiles = (kind === "books" || kind === "direct") ? [...directFiles, ...books] : directFiles;
   const primaryMeta = SECTION_META[kind] || SECTION_META.direct;
 
   // Tutorials: ascending order (oldest first — Tutorial 1 → Tutorial 2 → …)
