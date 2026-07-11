@@ -192,14 +192,11 @@ export default function NotesHub() {
                 </h4>
                 <div className="grid gap-2">
                   {results.files.map((file) => {
-                    const isPdf = (file.original_filename || "").split(".").pop()?.toLowerCase() === "pdf";
-                    const viewUrl = isPdf ? `/api/files/${file.id}/view` : `/viewer/${file.id}`;
+                    const viewUrl = `/viewer/${file.id}`;
                     return (
-                      <a
+                      <Link
                         key={file.id}
-                        href={viewUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        to={viewUrl}
                         className="p-3 bg-white/5 hover:bg-[#00E5D4]/10 rounded-xl border border-white/5 hover:border-[#00E5D4]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-1 transition-all group"
                       >
                         <div className="min-w-0">
@@ -211,7 +208,7 @@ export default function NotesHub() {
                         <span className="text-[10px] font-mono text-amber-400 group-hover:text-[#00E5D4] shrink-0 sm:ml-2 uppercase tracking-wider bg-white/5 px-2 py-0.5 rounded border border-white/5">
                           {file.category}
                         </span>
-                      </a>
+                      </Link>
                     );
                   })}
                 </div>

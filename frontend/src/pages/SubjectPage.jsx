@@ -59,7 +59,7 @@ export default function SubjectPage() {
   }, [subjectId]);
 
   const kind = classify(subject?.name);
-  const showModules = modules.length > 0;
+  const showModules = kind === "modules" && modules.length > 0;
   const primaryFiles = kind === "books" ? books : directFiles;
   const primaryMeta = SECTION_META[kind] || SECTION_META.direct;
 

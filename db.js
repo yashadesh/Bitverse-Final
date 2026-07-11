@@ -196,15 +196,41 @@ function matches(doc, query) {
   if (!query) return true;
   for (const key in query) {
     const val = query[key];
-    if (val && typeof val === 'object') {
-      // Basic support for $ne or other simple query operators if used
+    
+    // Handle $or operator
+    if (key === '$or' && Array.isArray(val)) {
+      const anyMatch = val.some(subQuery => matches(doc, subQuery));
+      if (!anyMatch) return false;
+      continue;
+    }
+    
+    // If the value in query is an object/operator
+    if (val && typeof val === 'object' && !(val instanceof RegExp)) {
       if ('$ne' in val) {
         if (doc[key] === val['$ne']) return false;
-        continue;
+      }
+      if ('$exists' in val) {
+        const exists = doc[key] !== undefined && doc[key] !== null;
+        if (val['$exists'] !== exists) return false;
+      }
+      if ('$in' in val && Array.isArray(val['$in'])) {
+        if (!val['$in'].includes(doc[key])) return false;
       }
       continue;
     }
-    if (doc[key] !== val) return false;
+    
+    // Handle RegExp match
+    if (val instanceof RegExp) {
+      if (typeof doc[key] !== 'string' || !val.test(doc[key])) {
+        return false;
+      }
+      continue;
+    }
+    
+    // Simple direct match
+    if (doc[key] !== val) {
+      return false;
+    }
   }
   return true;
 }
@@ -397,6 +423,27 @@ export const dbService = {
           }
         }
         return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0, upsertedCount: !doc && options.upsert ? 1 : 0 };
+      },
+      findOneAndUpdate: async (query, update, options = {}) => {
+        if (isConnected) {
+          try {
+            return await db.collection(name).findOneAndUpdate(query, update, options);
+          } catch (err) {
+            console.warn(`MongoDB findOneAndUpdate failed on ${name}. Falling back to mock.`, err);
+          }
+        }
+        let doc = mockDb[name].find(d => matches(d, query));
+        if (doc) {
+          if (update.$set) {
+            Object.assign(doc, update.$set);
+          }
+          if (update.$inc) {
+            for (const k in update.$inc) {
+              doc[k] = (doc[k] || 0) + update.$inc[k];
+            }
+          }
+        }
+        return doc;
       },
       updateMany: async (query, update) => {
         if (isConnected) {
