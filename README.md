@@ -1,1 +1,1 @@
-# Here are your Instructions
+Bitverse | Student Resource Hub for BIT Mesra
