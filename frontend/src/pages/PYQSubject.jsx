@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import FileCard from "@/components/FileCard";
 import PaginatedList from "@/components/PaginatedList";
 import { useSubject, useFiles } from "@/hooks/useQueries";
@@ -22,6 +23,12 @@ export default function PYQSubject() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs 
+        items={[
+          { label: "PYQs Hub", path: "/pyqs" },
+          { label: subject?.name || "Loading..." }
+        ]} 
+      />
       <Link to="/pyqs" className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#00E5D4] mb-6">
         <ArrowLeft className="w-4 h-4" /> Back
       </Link>

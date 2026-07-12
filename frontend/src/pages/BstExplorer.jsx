@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Sparkles, Search, Play, Award, GraduationCap, RefreshCw, Layers, ArrowRight, HelpCircle } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import { useSubjects } from "@/hooks/useQueries";
 import { toast } from "sonner";
 
@@ -308,6 +309,7 @@ export default function BstExplorer() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs items={[{ label: "BST Explorer" }]} />
       <PageHeader
         chip="Academic Tree Visualizer"
         title={<>BST Subject <span className="text-[#00E5D4]">Explorer</span></>}

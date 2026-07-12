@@ -1,6 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useSubjects } from "@/hooks/useQueries";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import { ChevronRight, FlaskConical, Atom, Cpu, Sigma, Cog, Ruler, Wrench, HeartHandshake, Dna, Code2, Zap, MessageSquare, Radiation, Dumbbell, Leaf } from "lucide-react";
 
 const ICONS = {
@@ -36,6 +37,12 @@ export default function SemesterPage() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs 
+        items={[
+          { label: "Notes Hub", path: "/notes" },
+          { label: `Semester ${sem}` }
+        ]} 
+      />
       <PageHeader
         chip={`Semester ${sem}${sem === "1" ? " (C) · 22 Credits" : " (P) · 22.5 Credits"}`}
         title={<>First Year · <span className="text-[#00E5D4]">Semester {sem}{sem === "1" ? " (C)" : " (P)"}</span></>}

@@ -1,5 +1,6 @@
 import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import FileCard from "@/components/FileCard";
 import { useSubjects, useFiles } from "@/hooks/useQueries";
 import { ScrollText } from "lucide-react";
@@ -46,6 +47,7 @@ export default function Syllabus() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs items={[{ label: "Syllabus" }]} />
       <PageHeader
         chip="Syllabus"
         title={<>First Year <span className="text-[#00E5D4]">Curriculum</span></>}

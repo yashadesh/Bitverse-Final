@@ -5,6 +5,7 @@ import {
   ChevronRight, FlaskConical, Atom, Cpu, Sigma, Cog, Ruler, Wrench, HeartHandshake, Dna, Code2, Zap, MessageSquare, Radiation, Dumbbell, Leaf
 } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import { useSubjects } from "@/hooks/useQueries";
 import { api, API } from "@/lib/api";
 
@@ -74,6 +75,7 @@ export default function NotesHub() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs items={[{ label: "Notes Hub" }]} />
       <PageHeader
         chip="Notes Library"
         title={<>First Year <span className="text-[#00E5D4]">Subjects</span></>}

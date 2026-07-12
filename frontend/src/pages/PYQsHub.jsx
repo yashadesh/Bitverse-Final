@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useSubjects } from "@/hooks/useQueries";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import { FileText, ChevronRight } from "lucide-react";
 
 export default function PYQsHub() {
@@ -14,6 +15,7 @@ export default function PYQsHub() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs items={[{ label: "PYQs Hub" }]} />
       <PageHeader
         chip="Previous Year Questions"
         title={<>Every <span className="text-[#00E5D4]">paper</span>, every subject</>}

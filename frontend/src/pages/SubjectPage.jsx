@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import FileCard from "@/components/FileCard";
 import PaginatedList from "@/components/PaginatedList";
 import { useSubject, useSubjectModules, useModuleFileCounts, useFiles } from "@/hooks/useQueries";
@@ -64,6 +65,13 @@ export default function SubjectPage() {
   if (loading) {
     return (
       <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32 animate-pulse">
+        <Breadcrumbs 
+          items={[
+            { label: "Notes Hub", path: "/notes" },
+            { label: "Semester ...", path: "/notes" },
+            { label: "Loading..." }
+          ]} 
+        />
         <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#00E5D4]/40 mb-6">
           <ArrowLeft className="w-4 h-4 opacity-40" /> Back
         </div>
@@ -129,6 +137,13 @@ export default function SubjectPage() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs 
+        items={[
+          { label: "Notes Hub", path: "/notes" },
+          { label: `Semester ${subject?.semester}`, path: `/notes/sem/${subject?.semester}` },
+          { label: subject?.name }
+        ]} 
+      />
       <Link
         to={subject ? `/notes/sem/${subject.semester}` : "/notes"}
         className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-[#00E5D4] mb-6"

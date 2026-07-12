@@ -1,5 +1,6 @@
 import React from "react";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import { LOGO_URL } from "@/lib/api";
 import { Sparkles, Users, ShieldCheck, Zap } from "lucide-react";
 
@@ -13,6 +14,7 @@ const points = [
 export default function About() {
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32" data-testid="about-page">
+      <Breadcrumbs items={[{ label: "About" }]} />
       <PageHeader
         chip="About"
         title={<>The Digital Universe of <span className="text-[#00E5D4]">BIT Mesra</span></>}

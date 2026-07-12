@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
+import Breadcrumbs from "@/components/Breadcrumbs";
 import FileCard from "@/components/FileCard";
 import { useSubjects, useFiles, useResources } from "@/hooks/useQueries";
 import { BookOpen, ExternalLink, ChevronDown } from "lucide-react";
@@ -44,6 +45,7 @@ export default function Resources() {
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
+      <Breadcrumbs items={[{ label: "Book Library" }]} />
       <PageHeader
         chip="Book Library"
         title={<>Subject-wise <span className="text-[#00E5D4]">books</span> for BITians</>}
