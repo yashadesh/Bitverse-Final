@@ -1,33 +1,19 @@
-import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import FileCard from "@/components/FileCard";
+import PaginatedList from "@/components/PaginatedList";
+import { useModule, useSubject, useFiles } from "@/hooks/useQueries";
 import { ArrowLeft, FileX2 } from "lucide-react";
 
 export default function ModulePage() {
   const { moduleId } = useParams();
-  const [mod, setMod] = useState(null);
-  const [subject, setSubject] = useState(null);
-  const [files, setFiles] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      api.get(`/modules/${moduleId}`).then(async ({ data }) => {
-        setMod(data);
-        if (data?.subject_id) {
-          const s = await api.get(`/subjects/${data.subject_id}`);
-          setSubject(s.data);
-        }
-      }).catch(() => {}),
-      api.get(`/files?module_id=${moduleId}&category=notes`).then(({ data }) => setFiles(data)).catch(() => {})
-    ]).finally(() => {
-      setLoading(false);
-    });
-  };
-  useEffect(load, [moduleId]);
+  const { data: mod, isLoading: loadingModule } = useModule(moduleId);
+  const { data: subject, isLoading: loadingSubject } = useSubject(mod?.subject_id);
+  const { data: files = [], isLoading: loadingFiles } = useFiles({ module_id: moduleId, category: "notes" });
+
+  const loading = loadingModule || (!!mod?.subject_id && loadingSubject) || loadingFiles;
 
   if (loading) {
     return (
@@ -76,16 +62,18 @@ export default function ModulePage() {
         testid="module-header"
       />
 
-      <div className="mt-10 space-y-3">
-        {files.map((f) => (
-          <FileCard key={f.id} file={f} apiBase={API} />
-        ))}
-        {files.length === 0 && (
-          <div className="card-glass p-12 flex flex-col items-center gap-3 text-center">
-            <FileX2 className="w-10 h-10 text-[#00E5D4]/60" />
-            <p className="text-white/70">No files here yet.</p>
-          </div>
-        )}
+      <div className="mt-10">
+        <PaginatedList
+          items={files}
+          testId="module-files-list"
+          renderItem={(f) => <FileCard key={f.id} file={f} apiBase={API} />}
+          emptyState={
+            <div className="card-glass p-12 flex flex-col items-center gap-3 text-center">
+              <FileX2 className="w-10 h-10 text-[#00E5D4]/60" />
+              <p className="text-white/70">No files here yet.</p>
+            </div>
+          }
+        />
       </div>
     </div>
   );

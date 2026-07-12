@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import FileCard from "@/components/FileCard";
+import PaginatedList from "@/components/PaginatedList";
+import { useSubject, useFiles } from "@/hooks/useQueries";
 import { ArrowLeft } from "lucide-react";
 
 const TABS = [
@@ -13,18 +15,10 @@ const TABS = [
 
 export default function PYQSubject() {
   const { subjectId } = useParams();
-  const [subject, setSubject] = useState(null);
   const [tab, setTab] = useState("mid");
-  const [files, setFiles] = useState([]);
 
-  useEffect(() => {
-    api.get(`/subjects/${subjectId}`).then(({ data }) => setSubject(data));
-  }, [subjectId]);
-
-  useEffect(() => {
-    api.get(`/files?category=pyq&subject_id=${subjectId}&pyq_type=${tab}`)
-      .then(({ data }) => setFiles(data));
-  }, [subjectId, tab]);
+  const { data: subject } = useSubject(subjectId);
+  const { data: files = [] } = useFiles({ category: "pyq", subject_id: subjectId, pyq_type: tab });
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">
@@ -55,11 +49,17 @@ export default function PYQSubject() {
         ))}
       </div>
 
-      <div className="mt-8 space-y-3">
-        {files.map((f) => <FileCard key={f.id} file={f} apiBase={API} />)}
-        {files.length === 0 && (
-          <div className="card-glass p-10 text-center text-white/60">No {TABS.find(t=>t.key===tab).label} papers uploaded yet.</div>
-        )}
+      <div className="mt-8">
+        <PaginatedList
+          items={files}
+          testId="pyq-files-list"
+          renderItem={(f) => <FileCard key={f.id} file={f} apiBase={API} />}
+          emptyState={
+            <div className="card-glass p-10 text-center text-white/60">
+              No {TABS.find((t) => t.key === tab).label} papers uploaded yet.
+            </div>
+          }
+        />
       </div>
     </div>
   );

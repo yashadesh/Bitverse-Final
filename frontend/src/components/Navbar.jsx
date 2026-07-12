@@ -13,6 +13,7 @@ const links = [
 
 export default function Navbar() {
   const loc = useLocation();
+
   if (loc.pathname.startsWith("/viewer")) return null;
   return (
     <header

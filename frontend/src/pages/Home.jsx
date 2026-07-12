@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, LOGO_URL } from "@/lib/api";
+import { LOGO_URL } from "@/lib/api";
 import TrendingChart from "@/components/TrendingChart";
+import { useStats, useHomepage, useAnnouncements } from "@/hooks/useQueries";
 import {
   BookOpen, FileText, ScrollText, Youtube, ArrowRight, Sparkles,
   BookMarked, GraduationCap, Zap, Rocket,
@@ -43,41 +44,24 @@ const quickCards = [
 ];
 
 export default function Home() {
-  const [stats, setStats] = useState({ files: 0, subjects: 20, modules: 100, semesters: 2 });
-  const [announcements, setAnnouncements] = useState([]);
-  const [heroContent, setHeroContent] = useState({
-    hero_title: "BITVERSE",
-    hero_subtitle: "The Digital Universe of BIT Mesra",
-    hero_description: "Notes · PYQs · Syllabus · Resources — everything a First Year BITian needs, in one beautiful place."
-  });
+  const statsQuery = useStats();
+  const homepageQuery = useHomepage();
+  const announcementsQuery = useAnnouncements();
 
-  useEffect(() => {
-    api.get("/stats").then(({ data }) => {
-      setStats((s) => ({
-        ...s,
-        files: data.pdf_files || 0,
-        subjects: data.subjects || 20,
-        modules: data.modules || 100,
-        semesters: data.semesters || 2,
-      }));
-    }).catch(() => {});
+  const stats = {
+    files: statsQuery.data?.pdf_files || 0,
+    subjects: statsQuery.data?.subjects || 20,
+    modules: statsQuery.data?.modules || 100,
+    semesters: statsQuery.data?.semesters || 2,
+  };
 
-    api.get("/homepage").then(({ data }) => {
-      if (data) {
-        setHeroContent({
-          hero_title: data.hero_title || "BITVERSE",
-          hero_subtitle: data.hero_subtitle || "The Digital Universe of BIT Mesra",
-          hero_description: data.hero_description || "Notes · PYQs · Syllabus · Resources — everything a First Year BITian needs, in one beautiful place."
-        });
-      }
-    }).catch(() => {});
+  const heroContent = {
+    hero_title: homepageQuery.data?.hero_title || "BITVERSE",
+    hero_subtitle: homepageQuery.data?.hero_subtitle || "The Digital Universe of BIT Mesra",
+    hero_description: homepageQuery.data?.hero_description || "Notes · PYQs · Syllabus · Resources — everything a First Year BITian needs, in one beautiful place."
+  };
 
-    api.get("/announcements").then(({ data }) => {
-      if (data) {
-        setAnnouncements(data.slice(0, 3));
-      }
-    }).catch(() => {});
-  }, []);
+  const announcements = (announcementsQuery.data || []).slice(0, 3);
 
   return (
     <div className="page-enter">

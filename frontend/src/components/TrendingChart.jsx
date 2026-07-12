@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { useTrending } from "@/hooks/useQueries";
 import { TrendingUp, Eye, ArrowRight, Activity } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer,
@@ -43,21 +42,8 @@ function CustomTooltip({ active, payload }) {
 }
 
 export default function TrendingChart() {
-  const [data, setData] = useState([]);
-
-  const load = () => {
-    api.get("/analytics/trending?limit=8").then(({ data }) => {
-      setData(data.trending || []);
-    }).catch(() => {});
-  };
-
-  useEffect(() => {
-    load();
-    const t = setInterval(() => {
-      load();
-    }, 20000); // live refresh every 20s to reduce unnecessary load and lag
-    return () => clearInterval(t);
-  }, []);
+  const trendingQuery = useTrending(8);
+  const data = trendingQuery.data || [];
 
   const chartData = data.map((d) => ({ ...d, shortName: shortName(d.name) }));
   const total = data.reduce((a, d) => a + d.views, 0);

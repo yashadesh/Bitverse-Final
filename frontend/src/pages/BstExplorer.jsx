@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Sparkles, Search, Play, Award, GraduationCap, RefreshCw, Layers, ArrowRight, HelpCircle } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
-import { api } from "@/lib/api";
+import { useSubjects } from "@/hooks/useQueries";
 import { toast } from "sonner";
 
 // BST Node Class
@@ -116,7 +116,8 @@ class BinarySearchTree {
 }
 
 export default function BstExplorer() {
-  const [subjects, setSubjects] = useState([]);
+  const subjectsQuery = useSubjects();
+  const subjects = subjectsQuery.data || [];
   const [tree, setTree] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchVal, setSearchVal] = useState("");
@@ -128,39 +129,39 @@ export default function BstExplorer() {
   const [showInfo, setShowInfo] = useState(true);
   const navigate = useNavigate();
 
-  const loadTree = async () => {
-    setLoading(true);
-    try {
-      const { data } = await api.get("/subjects");
-      setSubjects(data);
-      
-      const bst = new BinarySearchTree();
-      // Insert in structured order to get a relatively balanced look
-      const sorted = [...data].sort((a, b) => a.name.localeCompare(b.name));
-      
-      // Balance algorithm: insert middle element first
-      const insertBalanced = (arr) => {
-        if (arr.length === 0) return;
-        const mid = Math.floor(arr.length / 2);
-        bst.insert(arr[mid]);
-        insertBalanced(arr.slice(0, mid));
-        insertBalanced(arr.slice(mid + 1));
-      };
+  useEffect(() => {
+    if (subjectsQuery.isLoading) {
+      setLoading(true);
+      return;
+    }
+    if (subjects.length > 0) {
+      try {
+        const bst = new BinarySearchTree();
+        // Insert in structured order to get a relatively balanced look
+        const sorted = [...subjects].sort((a, b) => a.name.localeCompare(b.name));
+        
+        // Balance algorithm: insert middle element first
+        const insertBalanced = (arr) => {
+          if (arr.length === 0) return;
+          const mid = Math.floor(arr.length / 2);
+          bst.insert(arr[mid]);
+          insertBalanced(arr.slice(0, mid));
+          insertBalanced(arr.slice(mid + 1));
+        };
 
-      insertBalanced(sorted);
-      bst.calculatePositions(bst.root, 400, 60, 180);
-      setTree(bst);
-    } catch (err) {
-      console.error("Failed to fetch tree:", err);
-      toast.error("Could not construct BST");
-    } finally {
+        insertBalanced(sorted);
+        bst.calculatePositions(bst.root, 400, 60, 180);
+        setTree(bst);
+      } catch (err) {
+        console.error("Failed to build tree:", err);
+        toast.error("Could not construct BST");
+      } finally {
+        setLoading(false);
+      }
+    } else {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadTree();
-  }, []);
+  }, [subjects, subjectsQuery.isLoading]);
 
   const handleSearch = (e) => {
     e.preventDefault();

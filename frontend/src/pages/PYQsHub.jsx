@@ -1,17 +1,16 @@
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { useSubjects } from "@/hooks/useQueries";
 import PageHeader from "@/components/PageHeader";
 import { FileText, ChevronRight } from "lucide-react";
 
 export default function PYQsHub() {
-  const [subjects, setSubjects] = useState([]);
-  useEffect(() => {
-    Promise.all([
-      api.get("/subjects?semester=1"),
-      api.get("/subjects?semester=2"),
-    ]).then(([a, b]) => setSubjects([...a.data, ...b.data]));
-  }, []);
+  const sem1Query = useSubjects(1);
+  const sem2Query = useSubjects(2);
+
+  const subjects = useMemo(() => {
+    return [...(sem1Query.data || []), ...(sem2Query.data || [])];
+  }, [sem1Query.data, sem2Query.data]);
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">

@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { useSubjects } from "@/hooks/useQueries";
 import PageHeader from "@/components/PageHeader";
 import { ChevronRight, FlaskConical, Atom, Cpu, Sigma, Cog, Ruler, Wrench, HeartHandshake, Dna, Code2, Zap, MessageSquare, Radiation, Dumbbell, Leaf } from "lucide-react";
 
@@ -31,14 +30,9 @@ const ICONS = {
 
 export default function SemesterPage() {
   const { sem } = useParams();
-  const [subjects, setSubjects] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api.get(`/subjects?semester=${sem}`).then(({ data }) => {
-      setSubjects(data); setLoading(false);
-    }).catch(() => setLoading(false));
-  }, [sem]);
+  const subjectsQuery = useSubjects(sem);
+  const subjects = subjectsQuery.data || [];
+  const loading = subjectsQuery.isLoading;
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">

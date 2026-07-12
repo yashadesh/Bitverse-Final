@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { api, API } from "@/lib/api";
+import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import FileCard from "@/components/FileCard";
+import { useSubjects, useFiles } from "@/hooks/useQueries";
 import { ScrollText } from "lucide-react";
 
 function SyllabusCard({ n, subs, files }) {
@@ -34,17 +34,15 @@ function SyllabusCard({ n, subs, files }) {
 }
 
 export default function Syllabus() {
-  const [sem1, setSem1] = useState([]);
-  const [sem2, setSem2] = useState([]);
-  const [files1, setFiles1] = useState([]);
-  const [files2, setFiles2] = useState([]);
+  const sem1Query = useSubjects(1);
+  const sem2Query = useSubjects(2);
+  const files1Query = useFiles({ category: "syllabus", semester: 1 });
+  const files2Query = useFiles({ category: "syllabus", semester: 2 });
 
-  useEffect(() => {
-    api.get("/subjects?semester=1").then(({ data }) => setSem1(data));
-    api.get("/subjects?semester=2").then(({ data }) => setSem2(data));
-    api.get("/files?category=syllabus&semester=1").then(({ data }) => setFiles1(data));
-    api.get("/files?category=syllabus&semester=2").then(({ data }) => setFiles2(data));
-  }, []);
+  const sem1 = sem1Query.data || [];
+  const sem2 = sem2Query.data || [];
+  const files1 = files1Query.data || [];
+  const files2 = files2Query.data || [];
 
   return (
     <div className="page-enter mx-auto max-w-6xl px-6 pt-28 md:pt-32">

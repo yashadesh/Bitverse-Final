@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
-import { api, API } from "@/lib/api";
+import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import FileCard from "@/components/FileCard";
+import PaginatedList from "@/components/PaginatedList";
+import { useSubject, useSubjectModules, useModuleFileCounts, useFiles } from "@/hooks/useQueries";
 import { FolderOpen, ChevronRight, ArrowLeft, GraduationCap, FileX2, BookOpen, FileText, FlaskConical } from "lucide-react";
 
 const DIRECT_FILE_SUBJECTS = new Set([
@@ -27,36 +29,26 @@ const SECTION_META = {
 
 export default function SubjectPage() {
   const { subjectId } = useParams();
-  const [subject, setSubject] = useState(null);
-  const [modules, setModules] = useState([]);
-  const [directFiles, setDirectFiles] = useState([]);
-  const [tutorials, setTutorials] = useState([]);
-  const [books, setBooks] = useState([]);
-  const [loading, setLoading] = useState(true); // Added loading state
 
-  useEffect(() => {
-    setLoading(true);
-    Promise.all([
-      api.get(`/subjects/${subjectId}`).then(({ data }) => setSubject(data)).catch(() => null),
-      api.get(`/subjects/${subjectId}/modules`).then(({ data }) => data).catch(() => []),
-      api.get(`/modules/file-counts`).then(({ data }) => data).catch(() => ({})),
-      api.get(`/files?category=notes&subject_id=${subjectId}`)
-        .then(({ data }) => setDirectFiles(data.filter(f => !f.module_id)))
-        .catch(() => {}),
-      api.get(`/files?category=tutorial&subject_id=${subjectId}`).then(({ data }) => setTutorials(data)).catch(() => {}),
-      api.get(`/files?category=book&subject_id=${subjectId}`).then(({ data }) => setBooks(data)).catch(() => {})
-    ]).then(([subRes, modulesData, countsData]) => {
-      if (modulesData) {
-        const enriched = modulesData.map(m => ({
-          ...m,
-          file_count: countsData && countsData[m.id] !== undefined ? countsData[m.id] : (m.file_count || 0)
-        }));
-        setModules(enriched);
-      }
-    }).finally(() => {
-      setLoading(false);
-    });
-  }, [subjectId]);
+  const { data: subject, isLoading: loadingSubject } = useSubject(subjectId);
+  const { data: rawModules = [], isLoading: loadingModules } = useSubjectModules(subjectId);
+  const { data: countsData = {}, isLoading: loadingCounts } = useModuleFileCounts();
+  const { data: notesData = [], isLoading: loadingNotes } = useFiles({ category: "notes", subject_id: subjectId });
+  const { data: tutorials = [], isLoading: loadingTutorials } = useFiles({ category: "tutorial", subject_id: subjectId });
+  const { data: books = [], isLoading: loadingBooks } = useFiles({ category: "book", subject_id: subjectId });
+
+  const loading = loadingSubject || loadingModules || loadingCounts || loadingNotes || loadingTutorials || loadingBooks;
+
+  const directFiles = useMemo(() => {
+    return notesData.filter(f => !f.module_id);
+  }, [notesData]);
+
+  const modules = useMemo(() => {
+    return rawModules.map(m => ({
+      ...m,
+      file_count: countsData && countsData[m.id] !== undefined ? countsData[m.id] : (m.file_count || 0)
+    }));
+  }, [rawModules, countsData]);
 
   const kind = classify(subject?.name);
   const showModules = kind === "modules" && modules.length > 0;
@@ -169,17 +161,17 @@ export default function SubjectPage() {
             </div>
             <span className="chip">{primaryFiles.length} Files</span>
           </div>
-          <div className="space-y-3">
-            {primaryFiles.map((f) => (
-              <FileCard key={f.id} file={f} apiBase={API} />
-            ))}
-            {primaryFiles.length === 0 && (
+          <PaginatedList
+            items={primaryFiles}
+            testId="primary-files-list"
+            renderItem={(f) => <FileCard key={f.id} file={f} apiBase={API} />}
+            emptyState={
               <div className="card-glass p-12 flex flex-col items-center gap-3 text-center">
                 <FileX2 className="w-10 h-10 text-[#00E5D4]/60" />
                 <p className="text-white/70">No {primaryMeta.label.toLowerCase()} uploaded yet.</p>
               </div>
-            )}
-          </div>
+            }
+          />
         </section>
       )}
 
@@ -232,8 +224,10 @@ export default function SubjectPage() {
           </div>
           <span className="chip">{tutorialsSorted.length} Files</span>
         </div>
-        <div className="space-y-3">
-          {tutorialsSorted.map((f, i) => (
+        <PaginatedList
+          items={tutorialsSorted}
+          testId="tutorials-list"
+          renderItem={(f, i) => (
             <div key={f.id} className="flex items-center gap-3" data-testid={`tutorial-item-${i + 1}`}>
               <span className="w-9 h-9 rounded-lg bg-[#00E5D4]/10 border border-[#00E5D4]/30 flex items-center justify-center font-mono text-[#00E5D4] text-sm shrink-0">
                 {i + 1}
@@ -242,11 +236,11 @@ export default function SubjectPage() {
                 <FileCard file={f} apiBase={API} />
               </div>
             </div>
-          ))}
-          {tutorialsSorted.length === 0 && (
-            <div className="card-glass p-8 text-center text-white/60 text-sm">No tutorials uploaded yet.</div>
           )}
-        </div>
+          emptyState={
+            <div className="card-glass p-8 text-center text-white/60 text-sm">No tutorials uploaded yet.</div>
+          }
+        />
       </section>
     </div>
   );

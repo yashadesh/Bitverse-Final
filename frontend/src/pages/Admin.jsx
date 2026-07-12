@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import PageHeader from "@/components/PageHeader";
 import {
   Upload, Plus, Trash2, FileText, FolderPlus, LinkIcon, BookOpen, FileArchive, GraduationCap, LogOut, ShieldCheck, ScrollText, Sparkles, BarChart2, Edit, LayoutDashboard,
-  FolderOpen, UploadCloud, CheckCircle2, Loader2
+  FolderOpen, UploadCloud, CheckCircle2, Loader2, Database, HardDrive, AlertTriangle
 } from "lucide-react";
 
 const TABS = [
@@ -19,7 +19,8 @@ const TABS = [
   { key: "folder", label: "Folder Upload", Icon: FolderOpen },
   { key: "announcements", label: "Announcements", Icon: ScrollText },
   { key: "homepage", label: "Homepage Hero", Icon: Sparkles },
-  { key: "analytics", label: "Analytics", Icon: BarChart2 }
+  { key: "analytics", label: "Analytics", Icon: BarChart2 },
+  { key: "storage", label: "Cloud & Storage", Icon: Database }
 ];
 
 const DIRECT_FILE_SUBJECTS = new Set([
@@ -139,8 +140,11 @@ export default function Admin() {
         {tab === "analytics" && (
           <ManageAnalytics />
         )}
+        {tab === "storage" && (
+          <ManageStorage />
+        )}
 
-        {tab !== "overview" && tab !== "book" && tab !== "announcements" && tab !== "homepage" && tab !== "analytics" && tab !== "folder" && (
+        {tab !== "overview" && tab !== "book" && tab !== "announcements" && tab !== "homepage" && tab !== "analytics" && tab !== "folder" && tab !== "storage" && (
           <ListFiles files={files} tab={tab} refresh={loadAll} />
         )}
         {tab === "book" && <ListResources resources={resources} refresh={loadAll} />}
@@ -1539,6 +1543,214 @@ function ManageAnalytics() {
           </div>
         </GlassBox>
       </div>
+    </div>
+  );
+}
+
+function ManageStorage() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [optimizing, setOptimizing] = useState(false);
+
+  const loadStatus = async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/admin/storage-status");
+      setStatus(data);
+    } catch {
+      toast.error("Failed to load storage status");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  const optimize = async () => {
+    setOptimizing(true);
+    try {
+      const { data } = await api.post("/admin/optimize-storage");
+      if (data.ok) {
+        toast.success(`Storage optimized! Released ${data.modifiedCount} redundant files from MongoDB.`);
+        loadStatus();
+      } else {
+        toast.error("Optimization failed");
+      }
+    } catch (err) {
+      toast.error("An error occurred during optimization");
+    } finally {
+      setOptimizing(false);
+    }
+  };
+
+  const formatBytes = (bytes) => {
+    if (!bytes || bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const dm = 2;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+  };
+
+  if (loading) {
+    return (
+      <div className="lg:col-span-2 flex flex-col items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 text-[#00E5D4] animate-spin mb-3" />
+        <div className="text-white/60 font-mono text-xs">Accessing Database Metrics...</div>
+      </div>
+    );
+  }
+
+  // Calculate percentage of 512 MB limit used
+  const limitBytes = 512 * 1024 * 1024;
+  const totalB64Size = status?.totalB64SizeBytes || 0;
+  const usagePercentage = Math.min(100, Math.round((totalB64Size / limitBytes) * 100));
+
+  return (
+    <div className="space-y-6 lg:col-span-2">
+      <div className="p-4 bg-[#0D1117]/80 border border-white/10 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="text-xs font-mono text-white/50 uppercase tracking-widest">Active Storage System</div>
+          <div className="text-lg font-bold text-white flex items-center gap-2 mt-1">
+            <Database className="w-5 h-5 text-[#00E5D4]" /> MongoDB Atlas Free Tier (512 MB Limit)
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {status?.hasCloudinary ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#00E5D4]/10 text-[#00E5D4] border border-[#00E5D4]/30 rounded-full text-xs font-medium font-mono">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Cloudinary Enabled: {status.cloudinaryCloudName}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/30 rounded-full text-xs font-medium font-mono">
+              <AlertTriangle className="w-3.5 h-3.5 animate-pulse" /> Cloudinary Disconnected
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <GlassBox title="Database Usage Profile" testid="storage-usage-profile">
+          <div className="space-y-5">
+            <div>
+              <div className="flex justify-between text-xs font-mono text-white/70 mb-2">
+                <span>Estimated MongoDB Binary Storage:</span>
+                <span className="font-bold text-white">{formatBytes(totalB64Size)} / 512 MB</span>
+              </div>
+              <div className="w-full bg-[#0D1117] h-3.5 rounded-full border border-white/5 p-0.5 overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    usagePercentage > 85 ? "bg-red-500" : usagePercentage > 60 ? "bg-amber-500" : "bg-[#00E5D4]"
+                  }`}
+                  style={{ width: `${usagePercentage}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-white/40 mt-1.5">
+                <span>0 MB</span>
+                <span>{usagePercentage}% Capacity Used</span>
+                <span>512 MB Limit</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 border-t border-white/10 pt-4">
+              <div className="p-3 bg-[#0D1117]/40 border border-white/5 rounded-xl">
+                <div className="text-[10px] font-mono text-white/50 uppercase">Base64 Binary Backups</div>
+                <div className="text-xl font-bold text-white mt-1 tabular-nums">{status?.b64FilesCount || 0}</div>
+                <div className="text-[10px] text-white/40 font-mono mt-0.5">Stored inside database</div>
+              </div>
+              <div className="p-3 bg-[#0D1117]/40 border border-white/5 rounded-xl">
+                <div className="text-[10px] font-mono text-white/50 uppercase font-medium">Total Library Files</div>
+                <div className="text-xl font-bold text-[#00E5D4] mt-1 tabular-nums">{status?.totalFiles || 0}</div>
+                <div className="text-[10px] text-white/40 font-mono mt-0.5">Total documents catalogued</div>
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t border-white/10 pt-4">
+              <div className="flex justify-between text-xs font-mono">
+                <span className="text-white/60">Cloud-Hosted Backup Size:</span>
+                <span className="text-emerald-400 font-bold tabular-nums">{formatBytes(status?.cloudB64SizeBytes)}</span>
+              </div>
+              <div className="flex justify-between text-xs font-mono">
+                <span className="text-white/60">Redundant Files in DB:</span>
+                <span className="text-[#00E5D4] font-bold tabular-nums">{status?.cloudB64FilesCount || 0} files</span>
+              </div>
+              <p className="text-[10px] font-mono text-white/45 leading-relaxed">
+                * Redundant files are already safely hosted in the cloud (Cloudinary / Google Drive) but still have backup blobs inside your database documents.
+              </p>
+            </div>
+          </div>
+        </GlassBox>
+
+        <GlassBox title="Database Optimization Center" testid="storage-optimization-center">
+          <div className="space-y-4 flex flex-col h-full justify-between">
+            <div className="space-y-3">
+              <p className="text-xs text-white/80 leading-relaxed">
+                Storing large PDF documents directly inside MongoDB Atlas free tier causes database size warnings and limits of 512MB to be exceeded quickly.
+              </p>
+              <div className="p-3.5 bg-[#00E5D4]/5 border border-[#00E5D4]/15 rounded-xl space-y-1.5">
+                <div className="text-xs font-bold text-[#00E5D4] flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" /> Permanent Solution: Cloudinary
+                </div>
+                <p className="text-[11px] text-white/70 leading-relaxed">
+                  Cloudinary provides a <strong>100% Free Tier with 25 GB of storage space</strong>. Once connected, all files are stored on Cloudinary. MongoDB only stores a tiny 1KB text record instead of megabytes of binary data!
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-4 space-y-3">
+              <button
+                onClick={optimize}
+                disabled={optimizing || !status?.cloudB64FilesCount}
+                className="w-full btn-neon primary py-3 flex items-center justify-center gap-2"
+              >
+                <HardDrive className="w-4 h-4" />
+                {optimizing ? "Optimizing Database..." : "Purge Redundant DB Backups"}
+              </button>
+              <p className="text-[10px] text-center font-mono text-white/40">
+                Instantly releases MongoDB storage space from any already-uploaded cloud files.
+              </p>
+            </div>
+          </div>
+        </GlassBox>
+      </div>
+
+      <GlassBox title="🔧 Simple Step-by-Step Guide to Connect Cloudinary (Permanently Free)" testid="cloudinary-setup-guide">
+        <div className="p-1 space-y-4 text-xs text-white/80 leading-relaxed">
+          <p>
+            To prevent database alerts and store up to <strong>25,000+ files and books completely for free</strong>, follow these quick steps:
+          </p>
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="p-3 bg-[#0D1117]/50 border border-white/5 rounded-xl space-y-1.5">
+              <div className="font-bold text-[#00E5D4] font-mono">1. Register Free Account</div>
+              <p className="text-white/65 text-[11px]">
+                Create a free account at <a href="https://cloudinary.com/" target="_blank" rel="noopener noreferrer" className="text-[#00E5D4] underline hover:text-[#00B8FF]">Cloudinary.com</a>. No credit card required.
+              </p>
+            </div>
+            <div className="p-3 bg-[#0D1117]/50 border border-white/5 rounded-xl space-y-1.5">
+              <div className="font-bold text-[#00E5D4] font-mono">2. Copy API Keys</div>
+              <p className="text-white/65 text-[11px]">
+                Log in, navigate to your Cloudinary dashboard console, and copy your:
+                <span className="block text-[10px] font-mono bg-black/30 p-1 rounded mt-1 text-[#00B8FF]">
+                  - Cloud Name<br/>- API Key<br/>- API Secret
+                </span>
+              </p>
+            </div>
+            <div className="p-3 bg-[#0D1117]/50 border border-white/5 rounded-xl space-y-1.5">
+              <div className="font-bold text-[#00E5D4] font-mono">3. Add as Secrets</div>
+              <p className="text-white/65 text-[11px]">
+                Open your AI Studio project menu, go to <strong>Settings / Secrets</strong>, add:
+                <span className="block text-[10px] font-mono bg-black/30 p-1 rounded mt-1 text-amber-300">
+                  CLOUDINARY_CLOUD_NAME<br/>CLOUDINARY_API_KEY<br/>CLOUDINARY_API_SECRET
+                </span>
+              </p>
+            </div>
+          </div>
+          <p className="font-mono text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-lg">
+            ⚡ Success: The server is already fully integrated with Cloudinary out of the box! Once you add these three secrets, future files will take <strong>0 bytes</strong> of MongoDB database space!
+          </p>
+        </div>
+      </GlassBox>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import {
   ChevronRight, FlaskConical, Atom, Cpu, Sigma, Cog, Ruler, Wrench, HeartHandshake, Dna, Code2, Zap, MessageSquare, Radiation, Dumbbell, Leaf
 } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
+import { useSubjects } from "@/hooks/useQueries";
 import { api, API } from "@/lib/api";
 
 const ICONS = {
@@ -38,16 +39,11 @@ export default function NotesHub() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [subjects, setSubjects] = useState([]);
-  const [subjectsLoading, setSubjectsLoading] = useState(true);
   const [selectedSem, setSelectedSem] = useState("all");
 
-  useEffect(() => {
-    api.get("/subjects").then(({ data }) => {
-      setSubjects(data);
-      setSubjectsLoading(false);
-    }).catch(() => setSubjectsLoading(false));
-  }, []);
+  const subjectsQuery = useSubjects();
+  const subjects = subjectsQuery.data || [];
+  const subjectsLoading = subjectsQuery.isLoading;
 
   useEffect(() => {
     if (!query.trim()) {

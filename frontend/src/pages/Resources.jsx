@@ -1,23 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, API } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { API } from "@/lib/api";
 import PageHeader from "@/components/PageHeader";
 import FileCard from "@/components/FileCard";
+import { useSubjects, useFiles, useResources } from "@/hooks/useQueries";
 import { BookOpen, ExternalLink, ChevronDown } from "lucide-react";
 
 export default function Resources() {
-  const [subjects, setSubjects] = useState([]);
-  const [books, setBooks] = useState([]);        // file uploads (category=book)
-  const [bookLinks, setBookLinks] = useState([]); // external book links (resource_type=book)
   const [openSubjectId, setOpenSubjectId] = useState(null);
 
-  useEffect(() => {
-    Promise.all([
-      api.get("/subjects?semester=1"),
-      api.get("/subjects?semester=2"),
-    ]).then(([a, b]) => setSubjects([...a.data, ...b.data]));
-    api.get("/files?category=book").then(({ data }) => setBooks(data));
-    api.get("/resources?resource_type=book").then(({ data }) => setBookLinks(data));
-  }, []);
+  const sem1Query = useSubjects(1);
+  const sem2Query = useSubjects(2);
+  const booksQuery = useFiles({ category: "book" });
+  const bookLinksQuery = useResources("book");
+
+  const subjects = useMemo(() => {
+    return [...(sem1Query.data || []), ...(sem2Query.data || [])];
+  }, [sem1Query.data, sem2Query.data]);
+
+  const books = booksQuery.data || [];
+  const bookLinks = bookLinksQuery.data || [];
 
   const grouped = useMemo(() => {
     const map = {};

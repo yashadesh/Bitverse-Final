@@ -1033,6 +1033,7 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
           uploadStream.end(req.file.buffer);
         });
         finalUrl = uploadResult.secure_url;
+        fileDataB64 = null; // cloud storage, don't waste DB space!
       } catch (err) {
         console.error("Cloudinary upload failed, falling back to local storage:", err);
         const uploadDir = path.join(process.cwd(), 'uploads');
@@ -1058,6 +1059,7 @@ async function handleUploadCore(req, isReplaceExistingId = null) {
 
         if (uploadResp.ok) {
           finalUrl = uniqueFilename;
+          fileDataB64 = null; // cloud storage, don't waste DB space!
         } else {
           throw new Error(`Emergent upload failed with status ${uploadResp.statusText}`);
         }
@@ -1354,6 +1356,69 @@ apiRouter.post("/homepage", requireAdmin, multer().none(), async (req, res) => {
       { upsert: true }
     );
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.get("/admin/storage-status", requireAdmin, async (req, res) => {
+  try {
+    const filesCol = dbService.collection("files");
+    const totalFiles = await filesCol.countDocuments({ is_deleted: { $ne: true } });
+    
+    // Find files with base64 backup data
+    const b64Files = await filesCol.find(
+      { file_data_b64: { $exists: true } },
+      { projection: { id: 1, display_name: 1, size: 1, url: 1, category: 1 } }
+    ).toArray();
+
+    const cloudB64Files = b64Files.filter(f => f.url && (f.url.startsWith("http://") || f.url.startsWith("https://")));
+    const localB64Files = b64Files.filter(f => !f.url || (!f.url.startsWith("http://") && !f.url.startsWith("https://")));
+
+    const totalB64Size = b64Files.reduce((acc, f) => acc + (parseInt(f.size) || 0), 0);
+    const cloudB64Size = cloudB64Files.reduce((acc, f) => acc + (parseInt(f.size) || 0), 0);
+    const localB64Size = localB64Files.reduce((acc, f) => acc + (parseInt(f.size) || 0), 0);
+
+    const hasCloudinary = !!(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+
+    res.json({
+      hasCloudinary,
+      cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
+      totalFiles,
+      b64FilesCount: b64Files.length,
+      cloudB64FilesCount: cloudB64Files.length,
+      localB64FilesCount: localB64Files.length,
+      totalB64SizeBytes: totalB64Size,
+      cloudB64SizeBytes: cloudB64Size,
+      localB64SizeBytes: localB64Size,
+    });
+  } catch (err) {
+    res.status(500).json({ detail: err.message });
+  }
+});
+
+apiRouter.post("/admin/optimize-storage", requireAdmin, async (req, res) => {
+  try {
+    const filesCol = dbService.collection("files");
+    // Remove base64 data for files that have cloud / external URLs (already safe!)
+    const result = await filesCol.updateMany(
+      { 
+        file_data_b64: { $exists: true },
+        url: { $regex: '^https?://' }
+      },
+      { $unset: { file_data_b64: "" } }
+    );
+
+    await dbService.collection("activity_log").insertOne({
+      id: crypto.randomUUID(),
+      time: new Date().toISOString(),
+      description: `Admin optimized database storage (released ${result.modifiedCount} redundant file backups)`
+    });
+
+    res.json({
+      ok: true,
+      modifiedCount: result.modifiedCount
+    });
   } catch (err) {
     res.status(500).json({ detail: err.message });
   }
